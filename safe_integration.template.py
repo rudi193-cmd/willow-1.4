@@ -1,76 +1,78 @@
 """
 SAFE Framework Integration Template
 ====================================
-Copy this file to your app root and customize for your data streams.
+Copy this file to your app root as safe_integration.py and set APP_ID.
+
+Drop point: POST /api/pigeon/drop
+Topics: ask, query, contribute, connect, status
+
+Usage:
+    import safe_integration as willow
+    reply = willow.ask("What is the capital of France?")
+    atoms = willow.query("France geography", limit=3)
+    willow.contribute("Paris is the capital of France.", category="reference")
 """
 
-from typing import Dict, List, Optional
-from datetime import datetime
+import uuid
+import requests
+from typing import Optional
+
+PIGEON_URL = "http://localhost:8420/api/pigeon/drop"
+APP_ID = "safe-app-{name}"  # Replace with your app's ID from safe-app-manifest.json
+
+_session_id = str(uuid.uuid4())
 
 
-# Define your app's data streams here
-# These must match the stream IDs in safe-app-manifest.json
-APP_STREAMS = [
-    {
-        "stream_id": "primary_data",
-        "purpose": "Describe what this data is used for",
-        "retention": "session",
-        "required": True,
-        "prompt": "May I access your data this session?"
-    }
-]
+def ask(prompt: str, persona: Optional[str] = None, tier: str = "free") -> str:
+    """Ask Willow a question. Returns the LLM response as a string."""
+    result = _drop("ask", {"prompt": prompt, "persona": persona, "tier": tier})
+    if result.get("ok"):
+        return result.get("result", "")
+    return f"[Error: {result.get('error', 'unknown')}]"
 
 
-class SAFESession:
-    """Manages SAFE session lifecycle and consent."""
+def query(q: str, limit: int = 5) -> list:
+    """Query Willow's knowledge graph. Returns a list of matching atoms."""
+    result = _drop("query", {"q": q, "limit": limit})
+    if result.get("ok"):
+        return result.get("result", [])
+    return []
 
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.started_at = datetime.now()
-        self.consents = {}
-        self.active = True
 
-    def on_session_start(self) -> Dict:
-        return {
-            "session_id": self.session_id,
-            "authorization_requests": APP_STREAMS
-        }
+def contribute(content: str, category: str = "note", metadata: Optional[dict] = None) -> dict:
+    """Contribute content to Willow's knowledge graph."""
+    return _drop("contribute", {
+        "content": content,
+        "category": category,
+        "metadata": metadata or {},
+    })
 
-    def on_consent_granted(self, stream_id: str, granted: bool) -> Dict:
-        self.consents[stream_id] = {
-            "granted": granted,
-            "timestamp": datetime.now().isoformat()
-        }
-        if not granted:
-            required = next((s for s in APP_STREAMS if s["stream_id"] == stream_id and s.get("required")), None)
-            if required:
-                return {"status": "consent_required", "message": f"{stream_id} consent required to use this app."}
-        return {"status": "ok"}
 
-    def can_access_stream(self, stream_id: str) -> bool:
-        return self.consents.get(stream_id, {}).get("granted", False)
+def connect(entity_a: str, entity_b: str, relation: str = "related_to") -> dict:
+    """Propose an entity connection for Willow review."""
+    return _drop("connect", {
+        "entity_a": entity_a,
+        "entity_b": entity_b,
+        "relation": relation,
+    })
 
-    def on_session_end(self) -> Dict:
-        self.active = False
-        actions = []
-        for stream in APP_STREAMS:
-            sid = stream["stream_id"]
-            if self.can_access_stream(sid):
-                retention = stream.get("retention", "session")
-                actions.append({
-                    "action": "retain" if retention == "permanent" else "delete",
-                    "stream": sid,
-                    "reason": "permanent_consent" if retention == "permanent" else "session_ended"
-                })
-        return {
-            "session_id": self.session_id,
-            "ended_at": datetime.now().isoformat(),
-            "duration_seconds": (datetime.now() - self.started_at).total_seconds(),
-            "cleanup_actions": actions
-        }
 
-    def on_revoke(self, stream_id: str) -> Dict:
-        if stream_id in self.consents:
-            self.consents[stream_id]["granted"] = False
-            self.consents[stream_id]["revoked_at"] = datetime.now().isoformat()
-        return {"status": "revoked", "stream": stream_id, "action": "data_deleted"}
+def status() -> dict:
+    """Check if Willow bus is reachable."""
+    return _drop("status", {})
+
+
+def _drop(topic: str, payload: dict) -> dict:
+    """Internal: drop a message onto the Pigeon bus."""
+    try:
+        r = requests.post(PIGEON_URL, json={
+            "topic": topic,
+            "app_id": APP_ID,
+            "session_id": _session_id,
+            "payload": payload,
+        }, timeout=30)
+        return r.json() if r.ok else {"ok": False, "error": r.text}
+    except requests.ConnectionError:
+        return {"ok": False, "error": "Willow not running (localhost:8420)"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

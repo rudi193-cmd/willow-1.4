@@ -10,13 +10,13 @@ You cloned willow-seed. This is the minimal bootstrap for a SAFE-compliant app i
    ```
    cp safe-app-manifest.template.json safe-app-manifest.json
    ```
-   Edit `safe-app-manifest.json` with your app's identity.
+   Edit `safe-app-manifest.json` with your app's ID, name, and entry point.
 
 2. **Copy the integration layer**
    ```
    cp safe_integration.template.py safe_integration.py
    ```
-   Edit `APP_STREAMS` to match your data streams.
+   Set `APP_ID` to match your `app_id` in the manifest.
 
 3. **Install deps**
    ```
@@ -26,23 +26,41 @@ You cloned willow-seed. This is the minimal bootstrap for a SAFE-compliant app i
 4. **Build your app**
    Your app code goes in a module matching the `entry_point` in your manifest.
 
+## Connecting to Willow
+
+Your app talks to Willow through one drop point: `POST /api/pigeon/drop`.
+
+```python
+import safe_integration as willow
+
+# Ask Willow a question
+reply = willow.ask("What is the capital of France?")
+
+# Query the knowledge graph
+atoms = willow.query("France geography", limit=3)
+
+# Contribute knowledge
+willow.contribute("Paris is the capital.", category="reference")
+```
+
+That's it. You never call fleet APIs, import llm_router, or know what model answered.
+Willow routes your drop to the right agent. You just drop and receive.
+
+## Drop Topics
+
+| Topic | What it does |
+|-------|-------------|
+| `ask` | LLM response via Willow fleet |
+| `query` | Knowledge graph search → atom list |
+| `contribute` | Ingest content into knowledge graph |
+| `connect` | Propose an entity connection for Willow review |
+| `status` | Health check |
+
 ## SAFE Principles
 
 - **Session consent**: Ask permission every time. It expires when the session ends.
 - **Local-first**: Data lives on the user's machine.
 - **Minimal permissions**: Only request what you actually use.
 - **No engagement optimization**: Your app is a tool, not a trap.
-
-## Connecting to Willow
-
-When your Willow node is running (default port 8420), your app can register via opauth:
-
-```python
-import requests
-resp = requests.post("http://localhost:8420/api/opauth/register", json={
-    "app_id": "your-app-id",
-    "manifest_path": "safe-app-manifest.json"
-})
-```
 
 ## ΔΣ=42
