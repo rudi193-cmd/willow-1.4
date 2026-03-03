@@ -1,8 +1,9 @@
-# Willow Seed
+# Willow 1.4
 
-**Status: BETA -- Not ready for general use yet.**
+A local-first AI operating system. One node. Your data stays on your machine.
 
-> Plant this. Everything grows from here.
+This is a transparency publication. The [1.1 release](https://github.com/seancampbell3161/Willow) shows how this was built.
+Nothing is hidden.
 
 ---
 
@@ -62,30 +63,49 @@ This is not sustainable. This is not healthy. This is not what technology should
 
 ---
 
-## Why "Seed"
+## Architecture
 
-This repository is the minimal bootstrap—the seed that starts a Willow node.
+Willow is organized into three tissue zones, each with three files named as acrostics of their function.
 
-The seed is small by design. It does not contain the full journal app. It does not contain the faculty system. It does not contain everything Willow will become.
+**Root Zone** — what the system senses and remembers
 
-It contains enough to grow.
+| File | Acrostic | Function |
+|------|----------|----------|
+| `soil.py` | Sense, Observe, Intake, Listen | Inbound signal processing |
+| `loam.py` | Ledger, Organic, Archive, Memory | Knowledge storage |
+| `vine.py` | Vector, Identify, Network, Entity | Relationship tracking |
 
-When you plant it, you get:
-- A node that runs locally
-- Session-based consent controls
-- A space that is yours
+**Trunk** — how the system routes and decides
 
-Everything else you add by choice.
+| File | Acrostic | Function |
+|------|----------|----------|
+| `rings.py` | Receive, Interpret, Navigate, Generate, Steer | Orchestration |
+| `graft.py` | Govern, Route, Arbitrate, Flow, Tasks | Task management |
+| `pulse.py` | Process, Unify, Loop, Schedule, Execute | Daemon worker |
+
+**Canopy** — what the system produces and verifies
+
+| File | Acrostic | Function |
+|------|----------|----------|
+| `leaf.py` | Library, External, Archive, Fetch | Verified source retrieval |
+| `prism.py` | Prove, Reference, Inspect, Source, Match | Source verification |
+| `crown.py` | Compose, Release, Output, Witness, Nurture | Output layer |
+
+**Pigeon** — vascular system. Belongs to no zone. Carries between all of them.
 
 ---
 
-## What's Not Ready Yet
+## Launch Benchmark (CROWN)
 
-The journal is still being built. That's the heart of Willow—the app that lets you write, reflect, and have conversations with an AI that actually listens.
+Willow is not launched until all five are green:
 
-We are not shipping the door without the room behind it.
-
-When the journal is ready, the seed will work on the first try. Until then, this repo exists as a placeholder. A promise. A map of what's coming.
+| | Function | Status |
+|-|----------|--------|
+| C | Compose | ✅ |
+| R | Release | ✅ |
+| O | Output | ✅ |
+| W | Witness | ⚠️ |
+| N | Nurture | ❌ |
 
 ---
 
@@ -137,7 +157,7 @@ A fresh node starts with source ring only. Everything else is earned.
 - [NASA Archive](https://github.com/rudi193-cmd/nasa-archive) — first production Willow app
 - [UTETY Chat](https://github.com/rudi193-cmd/safe-app-utety-chat) — AI faculty system
 
-**Status:** BETA. Come back when the journal is ready.
+**Status:** Active development. See CROWN benchmark above for current state.
 
 ---
 
