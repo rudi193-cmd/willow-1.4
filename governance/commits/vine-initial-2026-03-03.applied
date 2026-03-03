@@ -1,0 +1,139 @@
+GOVERNANCE PROPOSAL
+===================
+ID:        vine-initial-2026-03-03
+File:      core/vine.py
+Tier:      T1 (core/)
+Author:    Shiva + Sean Campbell
+Date:      2026-03-03
+Status:    PENDING
+
+
+SUMMARY
+-------
+Implement VINE — the entity relationship layer.
+Fills the stub in core/vine.py with a working three-layer entity model,
+relationship tracking, and graph queries.
+
+This is the direct answer to the gap exposed today:
+"a personal AI that actually knows the USER."
+
+
+THE THREE-LAYER MODEL
+---------------------
+L1 — Anonymous: type known, identity unknown. ("a person", "someone")
+     Confidence low. No name stored. Used when we observe without knowing.
+
+L2 — Reference: named or aliased, not fully verified.
+     ("Sean", "my daughter", "the boss") Confidence medium.
+     This is where most personal knowledge lives.
+
+L3 — Named: fully identified, verifiable or consented.
+     ("Sean Patrick Campbell", "Case 26-10177-j13")
+     Confidence high. May link to external records (PRISM layer).
+
+Promotion path: L1 → L2 → L3 as context accumulates.
+Demotion: never automatic — only human can demote.
+BLACK_BOX flag: L2/L3 entities can be flagged to suppress retrieval.
+
+
+SCHEMA
+------
+Table: entities
+  id             INTEGER PRIMARY KEY
+  layer          INTEGER NOT NULL (1, 2, or 3)
+  entity_type    TEXT NOT NULL  (person, project, concept, tool, place, event, legal)
+  name           TEXT           (NULL for L1)
+  confidence     REAL DEFAULT 0.5
+  mention_count  INTEGER DEFAULT 1
+  first_seen     TEXT NOT NULL
+  last_seen      TEXT NOT NULL
+  username       TEXT NOT NULL
+  promoted_from  INTEGER REFERENCES entities(id)
+  is_blackbox    INTEGER DEFAULT 0
+  notes          TEXT
+
+Table: entity_aliases
+  id         INTEGER PRIMARY KEY
+  entity_id  INTEGER REFERENCES entities(id)
+  alias      TEXT NOT NULL
+  source     TEXT
+  UNIQUE(entity_id, alias)
+
+Table: entity_relations
+  id             INTEGER PRIMARY KEY
+  entity_a       INTEGER REFERENCES entities(id)
+  entity_b       INTEGER REFERENCES entities(id)
+  relation_type  TEXT NOT NULL
+  confidence     REAL DEFAULT 0.5
+  evidence_count INTEGER DEFAULT 1
+  first_seen     TEXT NOT NULL
+  last_seen      TEXT NOT NULL
+  username       TEXT NOT NULL
+  UNIQUE(entity_a, entity_b, relation_type)
+
+
+PUBLIC API
+----------
+init_tables(db_path)
+  Create schema. Idempotent.
+
+upsert(db_path, name, entity_type, username, layer=2, notes=None) → int
+  Insert or update entity. Returns entity_id.
+  On conflict (same name+username): increment mention_count, update last_seen.
+
+link(db_path, name_a, name_b, relation_type, username, confidence=0.5) → int
+  Create or strengthen a relationship between two entities.
+  On conflict: increment evidence_count, update last_seen, raise confidence.
+
+get(db_path, name, username) → dict | None
+  Fetch entity by name (checks aliases too). Returns None if BLACK_BOX.
+
+related(db_path, entity_id, relation_type=None, min_confidence=0.3) → list[dict]
+  Get connected entities. Traverses both directions.
+
+extract(text, username) → list[dict]
+  Tier 1: regex against known entity patterns.
+  Tier 2: fleet call (llm_router.ask) for open extraction.
+  Returns list of {name, entity_type, layer} dicts.
+
+promote(db_path, entity_id, new_layer, name=None) → bool
+  Promote entity to higher layer. name required when promoting to L2+.
+
+search(db_path, query, username, layer=None) → list[dict]
+  Fuzzy name + alias search. Respects BLACK_BOX.
+
+blackbox(db_path, entity_id) → bool
+  Flag entity to suppress from retrieval. Irreversible without human action.
+
+
+IMPLEMENTATION APPROACH
+-----------------------
+- Single SQLite file at artifacts/{username}/vine.db
+- WAL mode, FK enforcement on
+- Fleet generates implementation body (per CLAUDE.md mandate)
+- Regex tier uses KNOWN_ENTITIES from old loam as seed
+- No dependency on old Willow — clean build
+
+
+WHAT THIS FIXES
+---------------
+Old Willow: entities table counts mentions. No relationships.
+  Gemini + hardcoded query → [MISSING_DATA] on Sean's own bankruptcy.
+
+VINE: entities have layers, relationships, confidence scores.
+  RINGS routes by intent → VINE resolves "who" → LOAM retrieves "what".
+  The system knows the user because it tracks how entities connect,
+  not just that they were mentioned.
+
+
+RISK ASSESSMENT
+---------------
+Risk:    LOW — new file, no existing code touched
+Rollback: delete vine.py, vine.db — zero impact on running system
+Scope:   Additive only. Nothing reads vine.py yet.
+
+
+APPROVAL
+--------
+[ ] Sean Campbell — ratify to proceed
+    Rename to .commit, then: implement vine.py per this spec

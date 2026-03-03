@@ -1,0 +1,67 @@
+PROPOSAL: pulse-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILE: core/pulse.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of PULSE — the daemon worker and heartbeat.
+
+PULSE is what makes the system breathe. It loops at 30-second intervals,
+picks tasks from GRAFT, runs them through registered handlers, manages a
+recurring schedule, and tracks its own health. Without PULSE, tasks sit
+in GRAFT forever. With PULSE, the system self-drives.
+
+DESIGN DECISIONS
+----------------
+1. tick() is the testable unit. The daemon loop just calls tick() every 30s.
+   Testing doesn't require spinning a thread.
+2. handlers dict: {handler_name: callable(username, metadata) → dict}.
+   Built-ins (soil_drain, loam_backfill_summaries, loam_backfill_embeddings)
+   are pre-registered if their modules are importable.
+3. 3-failure backoff: per-handler failure counter. After 3 consecutive
+   failures, backoff doubles (30s → 60s → 120s → max 300s). Resets on success.
+4. archive_stale() runs on daemon startup. Moves completed/failed tasks
+   older than N days to graft_archive table. Keeps graft.db lean.
+5. Recurring schedules stored in pulse.db (schedules table).
+   due_schedules() returns jobs where next_run <= now.
+6. Daemon runs in a background thread. stop() sets a threading.Event.
+7. health() returns last_tick, tasks_processed (session total), errors,
+   uptime_seconds, schedule_count.
+8. Caller provides all db_paths. No path logic inside.
+
+PUBLIC API
+----------
+init_tables(db_path) → None
+
+# Scheduler
+add_schedule(db_path, username, name, handler_name,
+             interval_seconds, metadata=None) → str
+list_schedules(db_path, username) → list[dict]
+remove_schedule(db_path, schedule_id) → bool
+due_schedules(db_path, username) → list[dict]
+
+# Tick (testable unit)
+tick(graft_db_path, pulse_db_path, username, handlers,
+     max_tasks=5) → dict  # {tasks_processed, schedules_ran, errors}
+
+# Daemon
+start(graft_db_path, pulse_db_path, username, handlers,
+      poll_interval=30) → threading.Thread
+stop() → None
+
+# Maintenance
+archive_stale(graft_db_path, username, older_than_days=7) → int
+health(pulse_db_path, username) → dict
+
+SCHEMA (pulse.db)
+-----------------
+schedules  — (schedule_id TEXT PK, username, name, handler_name,
+              interval_seconds INT, last_run TEXT, next_run TEXT,
+              enabled INT DEFAULT 1, consecutive_failures INT DEFAULT 0,
+              metadata TEXT)
+pulse_log  — (id, username, tick_at TEXT, tasks_processed INT,
+              schedules_ran INT, errors INT)
+
+GOVERNANCE: graft-initial-2026-03-03.applied

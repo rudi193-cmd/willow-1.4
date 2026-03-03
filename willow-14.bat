@@ -1,16 +1,16 @@
 @echo off
-REM Willow Daemon Launcher
-REM Starts all background daemons for the fractal AI OS
+REM Willow 1.4 — Full Boot
+REM Starts server + all daemons, then opens the login screen.
 
 echo ========================================
-echo Willow Fractal AI OS - Daemon Launcher
+echo  Willow 1.4 // Shiva's Ground
 echo ========================================
 echo.
 
-REM Change to Willow directory
+REM Change to willow-1.4 directory
 cd /d "%~dp0"
 
-REM Check if Python is available
+REM Check for Python
 python --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python not found in PATH
@@ -18,6 +18,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM --- SERVER ---
+echo [*] Starting Willow 1.4 server on port 2121...
+start "Willow14-Server" /MIN cmd /c "uvicorn server:app --host 0.0.0.0 --port 2121 --reload"
+
+REM Give server a moment to bind
+timeout /t 3 >nul
+
+REM --- BROWSER ---
+echo [*] Opening login screen...
+start "" "http://localhost:2121/"
+
+echo.
 echo Starting daemons...
 echo.
 
@@ -51,19 +63,12 @@ start "Willow-Pulse" /MIN python core/pulse.py --daemon
 
 echo.
 echo ========================================
-echo All daemons started!
+echo  Willow 1.4 is running.
+echo  Server:  http://localhost:2121/
+echo  Daemons: 7 started
 echo ========================================
 echo.
-echo Running processes:
-tasklist /FI "WINDOWTITLE eq Willow-*" 2>nul
-echo.
-echo To stop all daemons, run: stop_daemons.bat
-echo To view daemon status, check log files in:
-echo   - governance/violations.log
-echo   - core/coherence_scan.log
-echo   - core/topology_build.log
-echo   - core/compaction.log
-echo   - core/safe_sync.log
-echo   - core/persona_scheduler.log
+echo To stop: close this window or run stop_daemons.bat
+echo Logs: core/*.log, governance/violations.log
 echo.
 pause

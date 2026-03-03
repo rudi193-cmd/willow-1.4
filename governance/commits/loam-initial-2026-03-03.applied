@@ -1,0 +1,60 @@
+PROPOSAL: loam-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILE: core/loam.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of LOAM — the knowledge storage layer for willow-1.4.
+
+LOAM is the soil memory layer. It stores what Willow knows:
+knowledge atoms, conversation memory, ring topology, gaps (loss function).
+
+Entity management lives in VINE. LOAM references entities by vine entity_id
+through a bridge table (knowledge_entities). VINE is an optional dependency —
+LOAM degrades gracefully if vine_db_path is not provided.
+
+DESIGN DECISIONS
+----------------
+1. Caller provides db_path (artifacts/{username}/loam.db). No path logic inside module.
+2. SQLite only. No postgres branching — clean build.
+3. try/finally on every connection. No connection leaks.
+4. All fleet calls (summaries, LLM entity extraction) happen BEFORE opening
+   DB connections. Transactions are fast writes only.
+5. FTS5 with porter+unicode61 tokenizer. Triggers keep index in sync.
+6. Semantic search falls back to FTS5 if embeddings unavailable.
+7. Gap table is the loss function — records what the system doesn't know.
+8. Ring assignment: source (governance/charter/seed), continuity (handoff/memory),
+   bridge (everything else). Human ring_override takes precedence.
+
+PUBLIC API
+----------
+init_tables(db_path) → None
+ingest(db_path, source_type, source_id, title, content, category, username,
+       vine_db_path=None, ring_override=None) → int
+get(db_path, knowledge_id) → Optional[dict]
+search(db_path, query, username, max_results=10) → list[dict]
+semantic_search(db_path, username, query, max_results=5) → list[dict]
+build_context(db_path, username, query, max_chars=3000) → str
+record_gap(db_path, username, query, source, gap_type, entity_name=None) → None
+get_top_gaps(db_path, username, limit=10) → list[dict]
+resolve_gap(db_path, username, query, source, knowledge_id) → None
+backfill_summaries(db_path, username, batch_size=5) → int
+backfill_embeddings(db_path, username, batch_size=20) → int
+stats(db_path, username) → dict
+ring(category, source_type, title, ring_override=None) → str
+
+SCHEMA
+------
+knowledge        — atoms (source_type, source_id UNIQUE, title, summary,
+                   content_snippet, category, ring, ring_override,
+                   embedding BLOB, created_at, username)
+knowledge_fts    — FTS5 virtual table (title, summary, content_snippet, category)
+knowledge_entities — bridge (knowledge_id → vine entity_id)
+conversation_memory — per-turn (knowledge_id, persona, user_input,
+                       assistant_response, coherence_index, delta_e, topics)
+knowledge_gaps   — loss function (query, source, gap_type, entity_name,
+                   times_hit, resolved, resolved_by_knowledge_id)
+
+GOVERNANCE: vine-initial-2026-03-03.applied (VINE implemented first — dependency)

@@ -1,0 +1,63 @@
+PROPOSAL: rings-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILE: core/rings.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of RINGS — the trunk routing and interpretation layer.
+
+RINGS is the central router. It interprets intent, routes to the right agent,
+injects knowledge context, and manages the Node Ring Registry + Pigeon contract.
+
+THE ROOT CAUSE FIX
+------------------
+Willow 1.x context_injector.py line 49 hardcodes:
+  query="system state current tasks"
+for all Kart knowledge retrievals regardless of what the conversation is about.
+This is why Gemini kept returning [MISSING_DATA] on Sean's own knowledge.
+
+RINGS 1.4 replaces that pattern with:
+  interpret(message) → semantic query extracted from the actual user message
+  build_context(username, agent_name, loam_db_path, message=None, query=None)
+
+Any agent that calls build_context() with message= gets query-aware retrieval.
+No more hardcoded strings.
+
+DESIGN DECISIONS
+----------------
+1. interpret(message) → str: lightweight semantic query extraction.
+   No fleet call — regex + keyword extraction. Fast enough for every turn.
+2. route(task, agents) → str: simple keyword-based agent recommendation.
+   Deterministic. No LLM for routing (avoids latency + recursion risk).
+3. Ring registry state stored in artifacts/{username}/rings.json.
+   No boot.py dependency. Portable.
+4. Pigeon contract: dataclasses, validate_inbound() strict.
+5. build_context() falls back gracefully if LOAM unavailable.
+6. Execution loop (KartOrchestrator) lives in GRAFT, not here.
+   RINGS = interpret + route + inject. GRAFT = execute + govern.
+
+PUBLIC API
+----------
+# Intent
+interpret(message) → str
+route(task, agents) → str
+
+# Context Injection
+build_context(username, agent_name, loam_db_path,
+              vine_db_path=None, message=None, query=None,
+              max_chars=800) → str
+
+# Ring Registry
+load_rings(state_path) → NodeRings
+save_rings(state_path, rings) → None
+enroll_peer(state_path, peer_id) → NodeRings
+enroll_gate(state_path, gate_path) → tuple[bool, str]
+ring_status(state_path) → dict
+
+# Pigeon Contract
+make_pigeon(content, gate_conditions, sender, seed_packet=None) → dict
+validate_inbound(payload) → tuple[bool, str]
+
+GOVERNANCE: soil-initial-2026-03-03.applied, loam-initial-2026-03-03.applied

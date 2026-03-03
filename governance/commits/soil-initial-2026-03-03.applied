@@ -1,0 +1,49 @@
+PROPOSAL: soil-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILE: core/soil.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of SOIL — the inbound signal processing layer.
+
+SOIL is the first contact layer. Raw input (files, text, events) enters here,
+gets normalized into a standard Signal format, queued in soil.db, and drained
+into LOAM for storage. SOIL has no opinions about what to do with signals —
+it just receives, normalizes, and passes downstream.
+
+DESIGN DECISIONS
+----------------
+1. Signal format: {signal_id, signal_type, source, content, category,
+   username, received_at, status, metadata}
+2. DB-backed queue (soil.db, caller provides path). Status: pending → ingested/failed.
+3. watch_drop() — polls a drop directory for new files not yet queued.
+   Polling (not inotify) for WSL compatibility.
+4. drain() — processes pending signals → calls loam.ingest_full() for each.
+   Returns count processed.
+5. normalize() is stateless — converts raw input into a Signal dict.
+   Caller can queue() it or discard it.
+6. Category inference from file extension when not provided.
+7. LOAM and VINE are optional deps — drain() degrades gracefully.
+
+PUBLIC API
+----------
+init_tables(db_path) → None
+normalize(source, content, signal_type, username, category=None, metadata=None) → dict
+queue(db_path, signal) → str  # returns signal_id
+drain(db_path, username, loam_db_path, vine_db_path=None,
+      batch_size=10, llm_router=None) → int
+watch_drop(db_path, username, drop_dir, extensions=None) → int  # files queued
+pending(db_path, username, limit=20) → list[dict]
+stats(db_path, username) → dict
+
+SCHEMA
+------
+signals  — (signal_id TEXT PK, signal_type, source, content_path TEXT,
+            category, username, received_at, status, metadata TEXT)
+
+Note: content stored as file path or inline (<= 8KB). Large content written
+to a sidecar file and content_path set. This keeps the queue table light.
+
+GOVERNANCE: loam-initial-2026-03-03.applied (LOAM implemented — downstream dep)
