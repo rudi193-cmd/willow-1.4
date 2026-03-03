@@ -17,7 +17,9 @@ import uuid
 import requests
 from typing import Optional
 
-PIGEON_URL = "http://localhost:8420/api/pigeon/drop"
+import os
+WILLOW_URL = os.environ.get("WILLOW_URL", "http://localhost:8420")
+PIGEON_URL = f"{WILLOW_URL}/api/pigeon/drop"
 APP_ID = "safe-app-{name}"  # Replace with your app's ID from safe-app-manifest.json
 
 _session_id = str(uuid.uuid4())
@@ -73,6 +75,11 @@ def _drop(topic: str, payload: dict) -> dict:
         }, timeout=30)
         return r.json() if r.ok else {"ok": False, "error": r.text}
     except requests.ConnectionError:
-        return {"ok": False, "error": "Willow not running (localhost:8420)"}
+        return {
+            "ok": False,
+            "guest_mode": True,
+            "error": f"Willow not reachable at {WILLOW_URL}. "
+                     "Set WILLOW_URL env var or run Willow locally."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
