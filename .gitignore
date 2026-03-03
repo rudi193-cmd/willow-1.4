@@ -1,0 +1,9 @@
+.env
+.env.local
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+shiva_memory/
+*.db
+*.log
