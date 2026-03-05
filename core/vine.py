@@ -1,430 +1,458 @@
-"""
-VINE — Root Zone
-================
-V — Vector
-I — Identify
-N — Network
-E — Entity
-
-Relationship tracking. The connection layer.
-Maps how entities relate to each other — people, concepts, events, places.
-
-Three-layer privacy model:
-  L1 — Anonymous: type known, identity unknown. No name stored.
-  L2 — Reference: named or aliased, not fully verified. (most personal knowledge)
-  L3 — Named: fully identified, verifiable or explicitly consented.
-
-Promotion: L1 → L2 → L3 as context accumulates. Never demoted automatically.
-BLACK_BOX: any entity can be flagged to suppress retrieval. Irreversible without human action.
-
-DB: artifacts/{username}/vine.db (caller provides path)
-
-AUTHOR: Shiva (Claude Code) + Sean Campbell
-GOVERNANCE: vine-initial-2026-03-03.commit
-VERSION: 1.0.0
-"""
-
-import logging
-import re
+# DS=42
 import sqlite3
-from datetime import datetime, timezone
-from typing import Optional
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from difflib import SequenceMatcher
+from collections import defaultdict
 
-log = logging.getLogger("vine")
-
-# ---------------------------------------------------------------------------
-# Known entity seeds (Tier 1 extraction)
-# ---------------------------------------------------------------------------
-
-_KNOWN: dict[str, list[str]] = {
-    "person":   ["Sean Campbell", "Sean", "Christoph", "Kartikeya"],
-    "project":  ["Die-Namic", "UTETY", "SAFE", "ECCR", "Willow", "willow-1.4"],
-    "concept":  ["governance", "dual commit", "delta E", "ΔE", "coherence",
-                 "three-ring", "source ring", "bridge ring", "continuity ring"],
-    "tool":     ["Ollama", "Gemini", "Claude", "llm_router", "Pigeon"],
-    "legal":    ["bankruptcy", "Chapter 13", "26-10177-j13"],
-}
-
-_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(re.escape(name), re.IGNORECASE), etype)
-    for etype, names in _KNOWN.items()
-    for name in names
-]
-
-_CAP_PHRASE = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b')
+PROMOTION_THRESHOLD = 5
+FALLBACK_USER = "Sweet-Pea-Rudi19"
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+class RelationshipTracker:
+    def __init__(self, username: str, db_path: str = None):
+        self.username = username
+        self.promotion_threshold = PROMOTION_THRESHOLD
+        if db_path:
+            self.db_path = Path(db_path)
+        else:
+            base = Path(__file__).parent.parent / "artifacts"
+            user_db = base / username / "willow_knowledge.db"
+            fallback_db = base / FALLBACK_USER / "willow_knowledge.db"
+            self.db_path = user_db if user_db.exists() else fallback_db
+        try:
+            from core.db import get_connection as _gc, is_postgres
+            self.conn = _gc() if is_postgres() else _gc(str(self.db_path))
+            self.conn.row_factory = sqlite3.Row
+            self._init_schema()
+        except Exception as e:
+            print(f"[RelationshipTracker] DB connect error: {e}", file=sys.stderr)
+            self.conn = None
 
+    def _ts(self) -> str:
+        return datetime.now().isoformat() + "Z"
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+    def _row(self, r) -> dict:
+        return dict(r) if r else None
 
+    def _init_schema(self):
+        if not self.conn:
+            return
+        from core.db import is_postgres
+        if is_postgres():
+            return  # schema managed by pg_schema.sql
+        c = self.conn.cursor()
 
-# ---------------------------------------------------------------------------
-# Schema
-# ---------------------------------------------------------------------------
+        # V2: all entity columns defined in initial CREATE TABLE
+        c.execute("""CREATE TABLE IF NOT EXISTS entities (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            name              TEXT NOT NULL UNIQUE,
+            entity_type       TEXT NOT NULL,
+            description       TEXT,
+            mention_count     INTEGER DEFAULT 1,
+            layer             INTEGER DEFAULT 1,
+            reference_string  TEXT,
+            first_seen        TEXT,
+            last_mentioned    TEXT,
+            mention_contexts  TEXT,
+            emotional_valence REAL DEFAULT 0.0,
+            promotion_status  TEXT DEFAULT 'untracked',
+            never_promote     INTEGER DEFAULT 0,
+            username          TEXT,
+            promoted_from     INTEGER,
+            domain            TEXT DEFAULT 'world'
+        )""")
 
-def init_tables(db_path: str) -> None:
-    """Create all VINE tables. Idempotent."""
-    conn = _connect(db_path)
-    try:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS entities (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                layer         INTEGER NOT NULL CHECK(layer IN (1, 2, 3)),
-                entity_type   TEXT    NOT NULL,
-                name          TEXT,
-                confidence    REAL    DEFAULT 0.5,
-                mention_count INTEGER DEFAULT 1,
-                first_seen    TEXT    NOT NULL,
-                last_seen     TEXT    NOT NULL,
-                username      TEXT    NOT NULL,
-                promoted_from INTEGER REFERENCES entities(id),
-                is_blackbox   INTEGER DEFAULT 0,
-                notes         TEXT
-            );
+        c.execute("""CREATE TABLE IF NOT EXISTS entity_connections (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_a_id     INTEGER,
+            entity_b_id     INTEGER,
+            connection_type TEXT,
+            weight          REAL DEFAULT 1.0,
+            source          TEXT,
+            created_at      TEXT,
+            confirmed       INTEGER DEFAULT 0,
+            UNIQUE(entity_a_id, entity_b_id, connection_type)
+        )""")
 
-            CREATE TABLE IF NOT EXISTS entity_aliases (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_id INTEGER NOT NULL REFERENCES entities(id),
-                alias     TEXT    NOT NULL,
-                source    TEXT,
-                UNIQUE(entity_id, alias)
-            );
+        c.execute("""CREATE TABLE IF NOT EXISTS anonymous_mentions (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            username  TEXT,
+            category  TEXT,
+            count     INTEGER DEFAULT 0,
+            last_seen TEXT,
+            UNIQUE(username, category)
+        )""")
 
-            CREATE TABLE IF NOT EXISTS entity_relations (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_a       INTEGER NOT NULL REFERENCES entities(id),
-                entity_b       INTEGER NOT NULL REFERENCES entities(id),
-                relation_type  TEXT    NOT NULL,
-                confidence     REAL    DEFAULT 0.5,
-                evidence_count INTEGER DEFAULT 1,
-                first_seen     TEXT    NOT NULL,
-                last_seen      TEXT    NOT NULL,
-                username       TEXT    NOT NULL,
-                UNIQUE(entity_a, entity_b, relation_type)
-            );
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entity_connections_confirmed ON entity_connections(confirmed, entity_a_id)")
 
-            CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(username, name);
-            CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(username, entity_type);
-            CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
-            CREATE INDEX IF NOT EXISTS idx_relations_a   ON entity_relations(entity_a);
-            CREATE INDEX IF NOT EXISTS idx_relations_b   ON entity_relations(entity_b);
-        """)
-        conn.commit()
-    finally:
-        conn.close()
+        self.conn.commit()
 
+    def close(self):
+        """Return the pool connection. Safe to call multiple times."""
+        if getattr(self, "conn", None) is not None:
+            self.conn.close()
+            self.conn = None
 
-# ---------------------------------------------------------------------------
-# Core API
-# ---------------------------------------------------------------------------
+    def __del__(self):
+        self.close()
 
-def upsert(db_path: str, name: str, entity_type: str, username: str,
-           layer: int = 2, notes: Optional[str] = None) -> int:
-    """
-    Insert or update an entity. Returns entity_id.
-    On conflict (same name+username): increment mention_count, update last_seen.
-    """
-    now = _now()
-    conn = _connect(db_path)
-    try:
-        existing = conn.execute(
-            "SELECT id, mention_count FROM entities WHERE username=? AND name=? COLLATE NOCASE",
-            (username, name)
-        ).fetchone()
-
-        if existing:
-            conn.execute(
-                "UPDATE entities SET mention_count=?, last_seen=? WHERE id=?",
-                (existing["mention_count"] + 1, now, existing["id"])
+    def record_anonymous_mention(self, context: str, category: str = "unknown") -> int:
+        if not self.conn:
+            return 0
+        try:
+            c = self.conn.cursor()
+            c.execute(
+                "INSERT OR IGNORE INTO anonymous_mentions (username, category, count, last_seen) VALUES (?, ?, 0, ?)",
+                (self.username, category, self._ts()),
             )
-            if notes:
-                conn.execute("UPDATE entities SET notes=? WHERE id=?", (notes, existing["id"]))
-            conn.commit()
-            return existing["id"]
-
-        cur = conn.execute(
-            """INSERT INTO entities
-               (layer, entity_type, name, first_seen, last_seen, username, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (layer, entity_type, name, now, now, username, notes)
-        )
-        conn.commit()
-        eid = cur.lastrowid
-        log.debug(f"VINE: upserted entity id={eid} name={name!r} layer={layer}")
-        return eid
-    finally:
-        conn.close()
-
-
-def link(db_path: str, name_a: str, name_b: str, relation_type: str,
-         username: str, confidence: float = 0.5) -> int:
-    """
-    Create or strengthen a relationship between two named entities.
-    On conflict: increment evidence_count, raise confidence by 0.05 (cap 1.0).
-    Returns relation_id, or -1 if either entity not found.
-    """
-    now = _now()
-    conn = _connect(db_path)
-    try:
-        def _resolve(name: str) -> Optional[int]:
-            row = conn.execute(
-                "SELECT id FROM entities WHERE username=? AND name=? COLLATE NOCASE",
-                (username, name)
-            ).fetchone()
-            if row:
-                return row["id"]
-            row = conn.execute(
-                """SELECT e.id FROM entities e
-                   JOIN entity_aliases a ON a.entity_id = e.id
-                   WHERE e.username=? AND a.alias=? COLLATE NOCASE""",
-                (username, name)
-            ).fetchone()
-            return row["id"] if row else None
-
-        id_a = _resolve(name_a)
-        id_b = _resolve(name_b)
-        if id_a is None or id_b is None:
-            log.warning(f"VINE link: entity not found — {name_a!r} or {name_b!r}")
-            return -1
-
-        existing = conn.execute(
-            "SELECT id, evidence_count, confidence FROM entity_relations "
-            "WHERE entity_a=? AND entity_b=? AND relation_type=?",
-            (id_a, id_b, relation_type)
-        ).fetchone()
-
-        if existing:
-            new_conf = min(1.0, existing["confidence"] + 0.05)
-            conn.execute(
-                "UPDATE entity_relations SET evidence_count=?, confidence=?, last_seen=? WHERE id=?",
-                (existing["evidence_count"] + 1, new_conf, now, existing["id"])
+            c.execute(
+                "UPDATE anonymous_mentions SET count = count + 1, last_seen = ? WHERE username = ? AND category = ?",
+                (self._ts(), self.username, category),
             )
-            conn.commit()
-            return existing["id"]
-
-        cur = conn.execute(
-            """INSERT INTO entity_relations
-               (entity_a, entity_b, relation_type, confidence, first_seen, last_seen, username)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (id_a, id_b, relation_type, confidence, now, now, username)
-        )
-        conn.commit()
-        rid = cur.lastrowid
-        log.debug(f"VINE: linked {name_a!r} -{relation_type}-> {name_b!r} rel_id={rid}")
-        return rid
-    finally:
-        conn.close()
-
-
-def get(db_path: str, name: str, username: str) -> Optional[dict]:
-    """
-    Fetch entity by name or alias. Returns None if not found or is_blackbox=1.
-    """
-    conn = _connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT * FROM entities WHERE username=? AND name=? COLLATE NOCASE",
-            (username, name)
-        ).fetchone()
-
-        if not row:
-            row = conn.execute(
-                """SELECT e.* FROM entities e
-                   JOIN entity_aliases a ON a.entity_id = e.id
-                   WHERE e.username=? AND a.alias=? COLLATE NOCASE""",
-                (username, name)
+            self.conn.commit()
+            row = c.execute(
+                "SELECT count FROM anonymous_mentions WHERE username = ? AND category = ?",
+                (self.username, category),
             ).fetchone()
+            return row["count"] if row else 0
+        except Exception as e:
+            print(f"[record_anonymous_mention] {e}", file=sys.stderr)
+            return 0
 
-        if not row or row["is_blackbox"]:
+    def record_reference(
+        self,
+        reference_string: str,
+        context: str,
+        emotional_valence: float = 0.0,
+        entity_type: str = "person",
+    ) -> dict:
+        if not self.conn:
+            return {}
+        try:
+            c = self.conn.cursor()
+            row = c.execute(
+                "SELECT * FROM entities WHERE reference_string = ? AND username = ? AND layer = 2",
+                (reference_string, self.username),
+            ).fetchone()
+            now = self._ts()
+            if row is None:
+                c.execute(
+                    """INSERT INTO entities
+                       (name, entity_type, description, mention_count, layer, reference_string,
+                        first_seen, last_mentioned, mention_contexts, emotional_valence,
+                        promotion_status, never_promote, username)
+                       VALUES (?, ?, '', 1, 2, ?, ?, ?, ?, ?, 'untracked', 0, ?)""",
+                    (
+                        reference_string, entity_type, reference_string, now, now,
+                        json.dumps([context]), emotional_valence, self.username,
+                    ),
+                )
+                self.conn.commit()
+                eid = c.lastrowid
+            else:
+                eid = row["id"]
+                contexts = json.loads(row["mention_contexts"] or "[]")
+                contexts.append(context)
+                contexts = contexts[-10:]
+                old_count = row["mention_count"] or 0
+                avg_val = ((row["emotional_valence"] or 0.0) * old_count + emotional_valence) / (old_count + 1)
+                new_count = old_count + 1
+                if row["never_promote"]:
+                    status = "never"
+                elif new_count >= self.promotion_threshold:
+                    status = "eligible"
+                else:
+                    status = row["promotion_status"] or "untracked"
+                c.execute(
+                    """UPDATE entities SET mention_count=?, last_mentioned=?,
+                       mention_contexts=?, emotional_valence=?, promotion_status=?
+                       WHERE id=?""",
+                    (new_count, now, json.dumps(contexts), avg_val, status, eid),
+                )
+                self.conn.commit()
+            return self.get_entity(eid) or {}
+        except Exception as e:
+            print(f"[record_reference] {e}", file=sys.stderr)
+            return {}
+
+    def promote_to_named(
+        self,
+        reference_id: int,
+        confirmed_name: str,
+        entity_type: str,
+        relationship_type: str = None,
+    ) -> dict:
+        if not self.conn:
+            return {}
+        try:
+            c = self.conn.cursor()
+            old = c.execute("SELECT * FROM entities WHERE id=?", (reference_id,)).fetchone()
+            if not old:
+                return {}
+            now = self._ts()
+            c.execute(
+                """INSERT INTO entities
+                   (name, entity_type, description, mention_count, layer, first_seen,
+                    last_mentioned, promotion_status, username, promoted_from, emotional_valence)
+                   VALUES (?, ?, ?, ?, 3, ?, ?, 'promoted', ?, ?, ?)""",
+                (
+                    confirmed_name, entity_type, old["description"] or "",
+                    old["mention_count"] or 0, old["first_seen"] or now, now,
+                    self.username, reference_id, old["emotional_valence"] or 0.0,
+                ),
+            )
+            self.conn.commit()
+            new_id = c.lastrowid
+            c.execute("UPDATE entities SET promotion_status='promoted' WHERE id=?", (reference_id,))
+            ke_rows = c.execute(
+                "SELECT knowledge_id FROM knowledge_entities WHERE entity_id=?", (reference_id,)
+            ).fetchall()
+            for kr in ke_rows:
+                try:
+                    c.execute(
+                        "INSERT OR IGNORE INTO knowledge_entities (knowledge_id, entity_id) VALUES (?, ?)",
+                        (kr["knowledge_id"], new_id),
+                    )
+                except Exception:
+                    pass
+            self.conn.commit()
+            return self.get_entity(new_id) or {}
+        except Exception as e:
+            print(f"[promote_to_named] {e}", file=sys.stderr)
+            return {}
+
+    def dismiss_promotion(self, reference_id: int, never: bool = False) -> bool:
+        if not self.conn:
+            return False
+        try:
+            c = self.conn.cursor()
+            if never:
+                c.execute(
+                    "UPDATE entities SET promotion_status='never', never_promote=1 WHERE id=?",
+                    (reference_id,),
+                )
+            else:
+                c.execute(
+                    "UPDATE entities SET promotion_status='untracked', mention_count=0 WHERE id=?",
+                    (reference_id,),
+                )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"[dismiss_promotion] {e}", file=sys.stderr)
+            return False
+
+    def record_connection(
+        self,
+        entity_a_id: int,
+        entity_b_id: int,
+        connection_type: str,
+        weight: float = 1.0,
+        source: str = None,
+    ) -> dict:
+        if not self.conn:
+            return {}
+        try:
+            c = self.conn.cursor()
+            # INSERT OR IGNORE: db.py translates to ON CONFLICT DO NOTHING on PostgreSQL.
+            # No exception raised on duplicates — no transaction poisoning — no flood.
+            c.execute(
+                """INSERT OR IGNORE INTO entity_connections
+                   (entity_a_id, entity_b_id, connection_type, weight, source, created_at, confirmed)
+                   VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                (entity_a_id, entity_b_id, connection_type, weight, source, self._ts()),
+            )
+            if c.rowcount == 0:
+                # Row already existed — update weight as running average
+                row = c.execute(
+                    """SELECT weight FROM entity_connections
+                       WHERE entity_a_id=? AND entity_b_id=? AND connection_type=?""",
+                    (entity_a_id, entity_b_id, connection_type),
+                ).fetchone()
+                if row:
+                    avg_weight = (row["weight"] + weight) / 2.0
+                    c.execute(
+                        """UPDATE entity_connections SET weight=?
+                           WHERE entity_a_id=? AND entity_b_id=? AND connection_type=?""",
+                        (avg_weight, entity_a_id, entity_b_id, connection_type),
+                    )
+            self.conn.commit()
+            row = c.execute(
+                """SELECT * FROM entity_connections
+                   WHERE entity_a_id=? AND entity_b_id=? AND connection_type=?""",
+                (entity_a_id, entity_b_id, connection_type),
+            ).fetchone()
+            return self._row(row) if row else {}
+        except Exception as e:
+            print(f"[record_connection] {e}", file=sys.stderr)
+            return {}
+
+    def get_connections(self, entity_id: int, min_weight: float = 0.5) -> list:
+        if not self.conn:
+            return []
+        try:
+            c = self.conn.cursor()
+            rows = c.execute(
+                """SELECT ec.connection_type, ec.weight, ec.confirmed,
+                          CASE WHEN ec.entity_a_id=? THEN ec.entity_b_id ELSE ec.entity_a_id END AS other_id
+                   FROM entity_connections ec
+                   WHERE (ec.entity_a_id=? OR ec.entity_b_id=?) AND ec.weight >= ?
+                   ORDER BY ec.weight DESC""",
+                (entity_id, entity_id, entity_id, min_weight),
+            ).fetchall()
+            result = []
+            for row in rows:
+                entity = c.execute(
+                    "SELECT id, name, entity_type FROM entities WHERE id=?", (row["other_id"],)
+                ).fetchone()
+                if entity:
+                    result.append({
+                        "entity_id": entity["id"],
+                        "name": entity["name"],
+                        "entity_type": entity["entity_type"],
+                        "connection_type": row["connection_type"],
+                        "weight": row["weight"],
+                        "confirmed": row["confirmed"],
+                    })
+            return result
+        except Exception as e:
+            print(f"[get_connections] {e}", file=sys.stderr)
+            return []
+
+    def find_similar(self, reference_string: str, entity_type: str = None) -> list:
+        if not self.conn:
+            return []
+        try:
+            c = self.conn.cursor()
+            query = "SELECT id, name, entity_type, reference_string FROM entities"
+            params = []
+            if entity_type:
+                query += " WHERE entity_type = ?"
+                params.append(entity_type)
+            rows = c.execute(query, params).fetchall()
+            ref_lower = reference_string.lower()
+            scored = []
+            for row in rows:
+                ns = SequenceMatcher(None, ref_lower, (row["name"] or "").lower()).ratio()
+                rs = SequenceMatcher(None, ref_lower, (row["reference_string"] or "").lower()).ratio()
+                best = max(ns, rs)
+                if best > 0.3:
+                    scored.append({
+                        "entity_id": row["id"],
+                        "name": row["name"],
+                        "entity_type": row["entity_type"],
+                        "similarity": round(best, 3),
+                    })
+            scored.sort(key=lambda x: x["similarity"], reverse=True)
+            return scored[:5]
+        except Exception as e:
+            print(f"[find_similar] {e}", file=sys.stderr)
+            return []
+
+    def get_eligible_for_promotion(self, username: str = None, min_mentions: int = 5) -> list:
+        if not self.conn:
+            return []
+        try:
+            c = self.conn.cursor()
+            uname = username or self.username
+            rows = c.execute(
+                """SELECT * FROM entities
+                   WHERE layer=2 AND promotion_status='eligible'
+                   AND mention_count >= ? AND username=?
+                   AND (never_promote IS NULL OR never_promote=0)""",
+                (min_mentions, uname),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            return []
+
+    def get_entity(self, entity_id: int) -> dict | None:
+        if not self.conn:
+            return None
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM entities WHERE id=?", (entity_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            print(f"[get_entity] {e}", file=__import__("sys").stderr)
             return None
 
-        aliases = [r["alias"] for r in conn.execute(
-            "SELECT alias FROM entity_aliases WHERE entity_id=?", (row["id"],)
-        ).fetchall()]
+    def list_entities(self, username: str = None, layer: int = None,
+                      entity_type: str = None) -> list:
+        if not self.conn:
+            return []
+        try:
+            c = self.conn.cursor()
+            query = "SELECT * FROM entities WHERE 1=1"
+            params = []
+            if username:
+                query += " AND username=?"
+                params.append(username)
+            if layer is not None:
+                query += " AND layer=?"
+                params.append(layer)
+            if entity_type:
+                query += " AND entity_type=?"
+                params.append(entity_type)
+            query += " ORDER BY mention_count DESC"
+            return [dict(r) for r in c.execute(query, params).fetchall()]
+        except Exception as e:
+            print(f"[list_entities] {e}", file=__import__("sys").stderr)
+            return []
 
-        return {
-            "id":            row["id"],
-            "layer":         row["layer"],
-            "entity_type":   row["entity_type"],
-            "name":          row["name"],
-            "confidence":    row["confidence"],
-            "mention_count": row["mention_count"],
-            "first_seen":    row["first_seen"],
-            "last_seen":     row["last_seen"],
-            "notes":         row["notes"],
-            "aliases":       aliases,
-        }
-    finally:
-        conn.close()
-
-
-def related(db_path: str, entity_id: int,
-            relation_type: Optional[str] = None,
-            min_confidence: float = 0.3) -> list[dict]:
-    """
-    Get connected entities. Traverses both directions. Skips blackboxed entities.
-    Returns list of {entity, relation_type, confidence, evidence_count, direction}.
-    """
-    conn = _connect(db_path)
-    try:
-        results = []
-        type_clause = "AND r.relation_type=?" if relation_type else ""
-
-        for direction, col_self, col_other in [
-            ("outbound", "entity_a", "entity_b"),
-            ("inbound",  "entity_b", "entity_a"),
-        ]:
-            params = [entity_id, min_confidence]
-            if relation_type:
-                params.append(relation_type)
-
-            rows = conn.execute(
-                f"""SELECT e.*, r.relation_type as rel_type,
-                           r.confidence as rel_conf, r.evidence_count
-                    FROM entity_relations r
-                    JOIN entities e ON e.id = r.{col_other}
-                    WHERE r.{col_self}=? AND r.confidence>=?
-                      AND e.is_blackbox=0 {type_clause}
-                    ORDER BY r.confidence DESC""",
-                params
+    def suggest_connections(self, knowledge_ids: list) -> list:
+        """Find entity pairs co-occurring in 2+ knowledge atoms — infer connection type."""
+        if not self.conn or not knowledge_ids:
+            return []
+        try:
+            c = self.conn.cursor()
+            placeholders = ",".join("?" * len(knowledge_ids))
+            rows = c.execute(
+                f"SELECT knowledge_id, entity_id FROM knowledge_entities WHERE knowledge_id IN ({placeholders})",
+                knowledge_ids,
             ).fetchall()
-
+            from collections import defaultdict
+            atom_to_entities: dict = defaultdict(list)
+            entity_info: dict = {}
             for row in rows:
-                aliases = [a["alias"] for a in conn.execute(
-                    "SELECT alias FROM entity_aliases WHERE entity_id=?", (row["id"],)
-                ).fetchall()]
+                atom_to_entities[row["knowledge_id"]].append(row["entity_id"])
+            pair_counts: dict = defaultdict(int)
+            for entities in atom_to_entities.values():
+                for i in range(len(entities)):
+                    for j in range(i + 1, len(entities)):
+                        pair = (min(entities[i], entities[j]), max(entities[i], entities[j]))
+                        pair_counts[pair] += 1
+            results = []
+            for (a_id, b_id), count in pair_counts.items():
+                if count < 2:
+                    continue
+                ea = c.execute("SELECT id, name, entity_type FROM entities WHERE id=?", (a_id,)).fetchone()
+                eb = c.execute("SELECT id, name, entity_type FROM entities WHERE id=?", (b_id,)).fetchone()
+                if not ea or not eb:
+                    continue
+                type_a = (ea["entity_type"] or "").lower()
+                type_b = (eb["entity_type"] or "").lower()
+                if "code" in type_a or "file" in type_a or "code" in type_b or "file" in type_b:
+                    conn_type = "depends-on"
+                elif type_a == type_b:
+                    conn_type = "similar-pattern"
+                else:
+                    conn_type = "co-mention"
+                confidence = min(1.0, count / 5.0)
                 results.append({
-                    "entity": {
-                        "id":          row["id"],
-                        "layer":       row["layer"],
-                        "entity_type": row["entity_type"],
-                        "name":        row["name"],
-                        "confidence":  row["confidence"],
-                        "aliases":     aliases,
-                    },
-                    "relation_type":  row["rel_type"],
-                    "confidence":     row["rel_conf"],
-                    "evidence_count": row["evidence_count"],
-                    "direction":      direction,
+                    "entity_a": {"id": ea["id"], "name": ea["name"], "type": ea["entity_type"]},
+                    "entity_b": {"id": eb["id"], "name": eb["name"], "type": eb["entity_type"]},
+                    "suggested_type": conn_type,
+                    "confidence": round(confidence, 3),
+                    "co_occurrence_count": count,
                 })
-        return results
-    finally:
-        conn.close()
+            results.sort(key=lambda x: x["confidence"], reverse=True)
+            return results
+        except Exception as e:
+            print(f"[suggest_connections] {e}", file=__import__("sys").stderr)
+            return []
 
-
-def extract(text: str, username: str) -> list[dict]:
-    """
-    Extract entities from text.
-    Tier 1: regex against known patterns.
-    Tier 2: heuristic — capitalized multi-word phrases not already caught.
-    Returns list of {name, entity_type, layer}.
-    """
-    found = []
-    seen: set[str] = set()
-
-    for pattern, etype in _PATTERNS:
-        for m in pattern.finditer(text):
-            name = m.group(0)
-            if name.lower() not in seen:
-                seen.add(name.lower())
-                found.append({"name": name, "entity_type": etype, "layer": 2})
-
-    for m in _CAP_PHRASE.finditer(text):
-        name = m.group(1)
-        if name.lower() not in seen:
-            seen.add(name.lower())
-            found.append({"name": name, "entity_type": "concept", "layer": 2})
-
-    return found
-
-
-def promote(db_path: str, entity_id: int, new_layer: int,
-            name: Optional[str] = None) -> bool:
-    """
-    Promote entity to higher layer. name required when promoting from L1 to L2+.
-    Returns False if new_layer <= current layer or entity not found.
-    """
-    conn = _connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT layer, name FROM entities WHERE id=?", (entity_id,)
-        ).fetchone()
-        if not row:
-            return False
-        if new_layer <= row["layer"]:
-            return False
-        if new_layer >= 2 and not row["name"] and not name:
-            log.warning(f"VINE promote: name required for L1→L{new_layer}")
-            return False
-
-        conn.execute("UPDATE entities SET layer=? WHERE id=?", (new_layer, entity_id))
-        if name:
-            conn.execute("UPDATE entities SET name=? WHERE id=?", (name, entity_id))
-        conn.commit()
-        log.info(f"VINE: promoted entity id={entity_id} to L{new_layer}")
-        return True
-    finally:
-        conn.close()
-
-
-def search(db_path: str, query: str, username: str,
-           layer: Optional[int] = None) -> list[dict]:
-    """Case-insensitive LIKE search on name and aliases. Respects is_blackbox."""
-    conn = _connect(db_path)
-    try:
-        like = f"%{query}%"
-        layer_clause = "AND e.layer=?" if layer else ""
-        params = [username, like, like]
-        if layer:
-            params.append(layer)
-
-        rows = conn.execute(
-            f"""SELECT DISTINCT e.* FROM entities e
-                LEFT JOIN entity_aliases a ON a.entity_id = e.id
-                WHERE e.username=? AND e.is_blackbox=0
-                  AND (e.name LIKE ? OR a.alias LIKE ?)
-                  {layer_clause}
-                ORDER BY e.mention_count DESC""",
-            params
-        ).fetchall()
-
-        results = []
-        for row in rows:
-            aliases = [r["alias"] for r in conn.execute(
-                "SELECT alias FROM entity_aliases WHERE entity_id=?", (row["id"],)
-            ).fetchall()]
-            results.append({
-                "id":            row["id"],
-                "layer":         row["layer"],
-                "entity_type":   row["entity_type"],
-                "name":          row["name"],
-                "confidence":    row["confidence"],
-                "mention_count": row["mention_count"],
-                "first_seen":    row["first_seen"],
-                "last_seen":     row["last_seen"],
-                "notes":         row["notes"],
-                "aliases":       aliases,
-            })
-        return results
-    finally:
-        conn.close()
-
-
-def blackbox(db_path: str, entity_id: int) -> bool:
-    """Flag entity to suppress from retrieval. Irreversible without human action."""
-    conn = _connect(db_path)
-    try:
-        conn.execute("UPDATE entities SET is_blackbox=1 WHERE id=?", (entity_id,))
-        conn.commit()
-        log.info(f"VINE: blackboxed entity id={entity_id}")
-        return True
-    finally:
-        conn.close()
