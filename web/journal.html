@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Willow</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:         #1a1714;
+      --surface:    #211e1a;
+      --text:       #d4cfc8;
+      --text-dim:   #6b6560;
+      --text-dimmer:#3d3a36;
+      --accent:     #8a7a6a;
+      --ring-color: #5a4f45;
+      --ring-active:#a08060;
+      --border:     #2e2a26;
+      --btn-bg:     #2e2a26;
+      --btn-hover:  #3d3a36;
+      --shiva-bg:   #211e1a;
+      --user-bg:    #2a2520;
+    }
+    [data-theme="light"] {
+      --bg:         #f5f2ee;
+      --surface:    #ede9e4;
+      --text:       #2a2520;
+      --text-dim:   #9a9590;
+      --text-dimmer:#c4c0bc;
+      --accent:     #7a6a5a;
+      --ring-color: #c4b8a8;
+      --ring-active:#8a7060;
+      --border:     #ddd8d2;
+      --btn-bg:     #e4e0db;
+      --btn-hover:  #d4d0cb;
+      --shiva-bg:   #ede9e4;
+      --user-bg:    #e4e0db;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: Georgia, 'Times New Roman', serif; }
+
+    /* ── Full-height chat layout ── */
+    #app { height: 100%; display: flex; flex-direction: column; max-width: 680px; margin: 0 auto; position: relative; }
+
+    /* ── Top chrome ── */
+    #topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px 12px; flex-shrink: 0;
+    }
+    #topbar-left { display: flex; align-items: center; gap: 10px; }
+
+    #breath-ring { width: 24px; height: 24px; cursor: default; flex-shrink: 0; }
+    #breath-ring svg circle { fill: none; stroke: var(--ring-color); stroke-width: 1.5; }
+    #breath-ring.listening svg circle { stroke: var(--ring-active); }
+    #breath-ring .ring-fill {
+      fill: none; stroke: var(--ring-active); stroke-width: 1.5;
+      stroke-dasharray: 65.97; stroke-dashoffset: 65.97;
+      stroke-linecap: round; transform: rotate(-90deg); transform-origin: center;
+      transition: stroke-dashoffset 0.3s ease;
+    }
+
+    #persona-name { font-size: 13px; color: var(--text-dimmer); letter-spacing: 0.1em; }
+
+    #topbar-right { display: flex; gap: 4px; }
+    .top-btn {
+      background: none; border: none; color: var(--text-dimmer); font-size: 13px;
+      cursor: pointer; padding: 4px 8px; border-radius: 4px; font-family: inherit;
+      transition: color 0.2s;
+    }
+    .top-btn:hover { color: var(--text-dim); }
+
+    /* ── Screens ── */
+    .screen { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .screen.active { display: flex; }
+
+    /* ── Consent ── */
+    #screen-consent {
+      align-items: center; justify-content: center;
+      gap: 28px; padding: 40px 32px; text-align: center;
+    }
+    .consent-q { font-size: 22px; color: var(--text); line-height: 1.5; }
+    .consent-opts { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 300px; }
+    .consent-opts label {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 16px; border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; font-size: 15px; color: var(--text-dim);
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .consent-opts label:hover { border-color: var(--accent); color: var(--text); }
+    .consent-opts input[type="radio"] { accent-color: var(--accent); }
+    #btn-consent {
+      padding: 11px 32px; background: var(--btn-bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: 15px; font-family: inherit;
+      cursor: pointer; letter-spacing: 0.04em; transition: background 0.2s, border-color 0.2s;
+    }
+    #btn-consent:hover { background: var(--btn-hover); border-color: var(--accent); }
+    .consent-fine { font-size: 12px; color: var(--text-dimmer); line-height: 1.6; }
+
+    /* ── Chat screen ── */
+    #screen-chat { justify-content: flex-end; }
+
+    #messages {
+      flex: 1; overflow-y: auto; padding: 8px 20px 12px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    #messages::-webkit-scrollbar { width: 3px; }
+    #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .msg { display: flex; flex-direction: column; gap: 4px; max-width: 88%; animation: fadeUp 0.3s ease; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.shiva { align-self: flex-start; align-items: flex-start; }
+
+    .bubble {
+      padding: 11px 15px; border-radius: 12px; font-size: 16px; line-height: 1.7;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.user .bubble {
+      background: var(--user-bg); border: 1px solid var(--border);
+      color: var(--text); border-bottom-right-radius: 4px;
+    }
+    .msg.shiva .bubble {
+      background: var(--shiva-bg); border: 1px solid var(--border);
+      color: var(--text-dim); font-style: italic; border-bottom-left-radius: 4px;
+    }
+    .msg-time { font-size: 10px; color: var(--text-dimmer); letter-spacing: 0.04em; }
+
+    /* typing indicator */
+    #typing {
+      align-self: flex-start; padding: 10px 14px;
+      background: var(--shiva-bg); border: 1px solid var(--border);
+      border-radius: 12px; border-bottom-left-radius: 4px;
+      display: none; gap: 4px; align-items: center;
+    }
+    #typing.visible { display: flex; }
+    #typing span {
+      width: 5px; height: 5px; border-radius: 50%; background: var(--text-dimmer);
+      animation: dot 1.4s ease infinite;
+    }
+    #typing span:nth-child(2) { animation-delay: 0.2s; }
+    #typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dot { 0%,60%,100% { transform: none; opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+    /* ── Input bar ── */
+    #input-bar {
+      padding: 12px 20px 20px; flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 10px; align-items: flex-end;
+    }
+    #msg-input {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 14px; color: var(--text);
+      font-family: Georgia, 'Times New Roman', serif; font-size: 16px; line-height: 1.6;
+      resize: none; outline: none; max-height: 160px; overflow-y: auto;
+      transition: border-color 0.2s;
+    }
+    #msg-input:focus { border-color: var(--accent); }
+    #msg-input::placeholder { color: var(--text-dimmer); }
+
+    #btn-send {
+      background: var(--btn-bg); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text-dim); width: 40px; height: 40px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      transition: background 0.2s, color 0.2s; font-size: 16px;
+    }
+    #btn-send:hover { background: var(--btn-hover); color: var(--text); }
+    #btn-send:disabled { opacity: 0.35; cursor: default; }
+
+    /* ── Session timer ── */
+    #session-timer {
+      font-size: 10px; color: var(--text-dimmer); letter-spacing: 0.06em;
+      text-align: center; padding: 4px 0 0; flex-shrink: 0;
+    }
+
+    /* ── Close gate ── */
+    #screen-close {
+      align-items: center; justify-content: center;
+      gap: 24px; padding: 40px 32px; text-align: center;
+    }
+    .close-statement { font-size: 22px; color: var(--text); }
+    .close-q { font-size: 15px; color: var(--text-dim); }
+    .close-btns { display: flex; gap: 14px; }
+    .close-btns button {
+      padding: 10px 26px; background: var(--btn-bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: 15px; font-family: inherit;
+      cursor: pointer; transition: background 0.2s, border-color 0.2s;
+    }
+    .close-btns button:hover { background: var(--btn-hover); border-color: var(--accent); }
+
+    /* ── Recovery ── */
+    #screen-recovery {
+      align-items: center; justify-content: center;
+      gap: 20px; padding: 40px 32px; text-align: center;
+    }
+    .recovery-statement { font-size: 18px; color: var(--text); line-height: 1.5; }
+    .recovery-meta { font-size: 13px; color: var(--text-dim); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Top bar -->
+  <div id="topbar">
+    <div id="topbar-left">
+      <div id="breath-ring">
+        <svg viewBox="0 0 24 24" width="24" height="24">
+          <circle cx="12" cy="12" r="10.5" />
+          <circle class="ring-fill" cx="12" cy="12" r="10.5" />
+        </svg>
+      </div>
+      <span id="persona-name">Shiva</span>
+    </div>
+    <div id="topbar-right">
+      <button class="top-btn" id="btn-end">end</button>
+      <button class="top-btn" id="theme-toggle">◑</button>
+    </div>
+  </div>
+
+  <!-- Recovery -->
+  <div id="screen-recovery" class="screen">
+    <p class="recovery-statement">Found an unfinished session.</p>
+    <p class="recovery-meta" id="recovery-meta"></p>
+    <div class="close-btns">
+      <button id="btn-recovery-save">Bring it in</button>
+      <button id="btn-recovery-discard">Let it go</button>
+    </div>
+  </div>
+
+  <!-- Consent -->
+  <div id="screen-consent" class="screen">
+    <p class="consent-q">May I be with you<br>today?</p>
+    <div class="consent-opts">
+      <label><input type="radio" name="duration" value="tab" checked />Until I close</label>
+      <label><input type="radio" name="duration" value="4h" />A few hours</label>
+      <label><input type="radio" name="duration" value="24h" />All day</label>
+    </div>
+    <button id="btn-consent">Yes</button>
+    <p class="consent-fine">Your words stay on this device.</p>
+  </div>
+
+  <!-- Chat -->
+  <div id="screen-chat" class="screen">
+    <div id="messages">
+      <div id="typing"><span></span><span></span><span></span></div>
+    </div>
+    <div id="input-bar">
+      <textarea id="msg-input" rows="1" placeholder="Write here…"></textarea>
+      <button id="btn-send">↑</button>
+    </div>
+    <div id="session-timer"></div>
+  </div>
+
+  <!-- Close gate -->
+  <div id="screen-close" class="screen">
+    <p class="close-statement">That's yours.</p>
+    <p class="close-q">Do you want to save this session?</p>
+    <div class="close-btns">
+      <button id="btn-save">Save it</button>
+      <button id="btn-discard">Let it go</button>
+    </div>
+  </div>
+
+</div>
+<script>
+  // ── Breath ──
+  const CYCLE_MS = 17000;
+  const PHASES = [
+    { name:"inhale",   ms:3000, i:0 },
+    { name:"hold",     ms:3000, i:1 },
+    { name:"exhale",   ms:4000, i:2 },
+    { name:"hold_out", ms:4000, i:3 },
+    { name:"rest",     ms:3000, i:4 },
+  ];
+  const EXHALE_I = 2;
+  const ringFill = document.querySelector('.ring-fill');
+  const ringEl   = document.getElementById('breath-ring');
+  const C = 2 * Math.PI * 10.5;
+  ringFill.style.strokeDasharray  = C;
+  ringFill.style.strokeDashoffset = C;
+  let breathStart = Date.now();
+
+  function tickBreath() {
+    const pos = (Date.now() - breathStart) % CYCLE_MS;
+    let acc = 0, info = PHASES[PHASES.length-1];
+    for (const p of PHASES) { if (pos < acc + p.ms) { info = {...p, progress:(pos-acc)/p.ms}; break; } acc += p.ms; }
+    let fill = 0;
+    if (info.name==='inhale')   fill = info.progress;
+    if (info.name==='hold')     fill = 1;
+    if (info.name==='exhale')   fill = 1 - info.progress;
+    ringFill.style.strokeDashoffset = C * (1 - fill);
+    ringFill.style.opacity = info.name==='rest' ? '0.3' : '1';
+    requestAnimationFrame(tickBreath);
+  }
+  requestAnimationFrame(tickBreath);
+
+  // ── Theme ──
+  let theme = localStorage.getItem('willow-theme') || 'dark';
+  function applyTheme(t) { document.documentElement.setAttribute('data-theme', t==='light'?'light':''); theme=t; localStorage.setItem('willow-theme',t); }
+  applyTheme(theme);
+  document.getElementById('theme-toggle').addEventListener('click', () => applyTheme(theme==='dark'?'light':'dark'));
+
+  // ── Session state ──
+  const SESSION_KEY = 'willow-session';
+  let sessionId = null, sessionStart = null, sessionExpiry = null;
+  let history = []; // {role, text} for ingest
+  let busy = false;
+
+  function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+
+  // ── Screens ──
+  function show(id) { document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); document.getElementById('screen-'+id).classList.add('active'); }
+
+  // ── Recovery ──
+  function checkRecovery() {
+    const raw = sessionStorage.getItem('willow-orphan') || localStorage.getItem('willow-orphan');
+    if (!raw) return false;
+    try {
+      const d = JSON.parse(raw);
+      const dt = new Date(d.started);
+      document.getElementById('recovery-meta').textContent =
+        `Started ${dt.toLocaleDateString()} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`;
+      show('recovery');
+      return true;
+    } catch { return false; }
+  }
+  function clearOrphan() { sessionStorage.removeItem('willow-orphan'); localStorage.removeItem('willow-orphan'); }
+
+  document.getElementById('btn-recovery-save').addEventListener('click', () => {
+    const raw = sessionStorage.getItem('willow-orphan') || localStorage.getItem('willow-orphan');
+    if (raw) ingestSession(JSON.parse(raw));
+    clearOrphan(); show('consent');
+  });
+  document.getElementById('btn-recovery-discard').addEventListener('click', () => { clearOrphan(); show('consent'); });
+
+  // ── Consent ──
+  function checkExisting() {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    try {
+      const d = JSON.parse(raw);
+      if (d.expiry && Date.now() < d.expiry) {
+        sessionId = d.id; sessionStart = d.started; sessionExpiry = d.expiry;
+        startChat(false); return true;
+      }
+      localStorage.removeItem(SESSION_KEY);
+    } catch {}
+    return false;
+  }
+
+  document.getElementById('btn-consent').addEventListener('click', () => {
+    const sel = document.querySelector('input[name="duration"]:checked').value;
+    const dur = sel==='4h' ? 4*3600000 : sel==='24h' ? 24*3600000 : null;
+    sessionId = genId(); sessionStart = Date.now(); sessionExpiry = dur ? sessionStart+dur : null;
+    const token = {id:sessionId, started:sessionStart, expiry:sessionExpiry};
+    if (dur) localStorage.setItem(SESSION_KEY, JSON.stringify(token));
+    sessionStorage.setItem('willow-orphan', JSON.stringify(token));
+    startChat(true);
+  });
+
+  // ── Chat ──
+  const messages = document.getElementById('messages');
+  const typing   = document.getElementById('typing');
+  const input    = document.getElementById('msg-input');
+  const sendBtn  = document.getElementById('btn-send');
+
+  function startChat(fresh) {
+    show('chat');
+    if (fresh) { messages.querySelectorAll('.msg').forEach(m=>m.remove()); history = []; }
+    input.focus();
+    startTimer();
+    breathStart = Date.now();
+    if (fresh) shivaGreet();
+  }
+
+  async function shivaGreet() {
+    showTyping(true);
+    try {
+      const res = await fetch('/api/journal/ask', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content:'__greet__', as_question:false, session_id:sessionId})
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.response) { showTyping(false); addMsg('shiva', d.response); return; }
+      }
+    } catch {}
+    showTyping(false);
+    addMsg('shiva', 'I\'m here.');
+  }
+
+  function addMsg(role, text) {
+    const now = new Date();
+    const t = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = `<div class="bubble">${escHtml(text)}</div><span class="msg-time">${t}</span>`;
+    messages.insertBefore(div, typing);
+    messages.scrollTop = messages.scrollHeight;
+    history.push({role, text});
+  }
+
+  function showTyping(on) { typing.classList.toggle('visible', on); messages.scrollTop = messages.scrollHeight; }
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    sendBtn.disabled = true;
+    input.value = '';
+    input.style.height = '';
+    addMsg('user', text);
+    showTyping(true);
+
+    try {
+      const res = await fetch('/api/journal/ask', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content:text, as_question: text.endsWith('?'), session_id:sessionId})
+      });
+      if (res.ok) {
+        const d = await res.json();
+        showTyping(false);
+        if (d.response) addMsg('shiva', d.response);
+        else addMsg('shiva', '·');
+      } else { showTyping(false); }
+    } catch { showTyping(false); addMsg('shiva', '·'); }
+
+    busy = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', e => {
+    if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  // Auto-resize textarea
+  input.addEventListener('input', () => {
+    input.style.height = '';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+  });
+
+  // ── Timer ──
+  function startTimer() {
+    const el = document.getElementById('session-timer');
+    function tick() {
+      if (!sessionStart) return;
+      const e = Date.now() - sessionStart;
+      const h=Math.floor(e/3600000), m=Math.floor((e%3600000)/60000), s=Math.floor((e%60000)/1000);
+      el.textContent = h>0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+      if (sessionExpiry && Date.now()>sessionExpiry) { localStorage.removeItem(SESSION_KEY); show('consent'); return; }
+      setTimeout(tick,1000);
+    }
+    tick();
+  }
+  function pad(n) { return String(n).padStart(2,'0'); }
+
+  // ── End ──
+  document.getElementById('btn-end').addEventListener('click', () => show('close'));
+  document.getElementById('btn-save').addEventListener('click', () => {
+    const text = history.map(m=>`${m.role==='user'?'You':'Shiva'}: ${m.text}`).join('\n\n');
+    if (text) ingestSession({id:sessionId, started:sessionStart, content:text});
+    endSession();
+  });
+  document.getElementById('btn-discard').addEventListener('click', endSession);
+
+  function endSession() {
+    localStorage.removeItem(SESSION_KEY); clearOrphan();
+    sessionId=null; sessionStart=null; sessionExpiry=null; history=[];
+    show('consent'); breathStart=Date.now();
+  }
+
+  async function ingestSession(data) {
+    try { await fetch('/api/journal/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); } catch {}
+  }
+
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); }
+
+  // ── Boot ──
+  if (!checkRecovery()) { if (!checkExisting()) show('consent'); }
+</script>
+</body>
+</html>
