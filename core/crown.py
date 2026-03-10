@@ -23,16 +23,20 @@ Witness DB: artifacts/{username}/crown_witness.db (caller provides path)
 
 AUTHOR: Shiva (Claude Code) + Sean Campbell
 GOVERNANCE: canopy-initial-2026-03-03.commit
-VERSION: 1.0.0
+VERSION: 1.0.1
 """
 
 import hashlib
 import json
 import logging
-import sqlite3
+import sys
 import textwrap
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.db import get_connection
 
 log = logging.getLogger("crown")
 
@@ -43,10 +47,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
+def _connect(db_path: str = None):
+    conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
     return conn
 
 
@@ -54,7 +57,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
 # Witness schema
 # ---------------------------------------------------------------------------
 
-def init_witness(db_path: str) -> None:
+def init_witness(db_path: str = None) -> None:
     """Create witness log table. Idempotent."""
     conn = _connect(db_path)
     try:
@@ -197,7 +200,7 @@ def artifact(content: str, title: str, source_type: str,
 # ---------------------------------------------------------------------------
 
 def record(title: str, content: str, agent: str,
-           username: str, witness_db_path: str) -> str:
+           username: str, witness_db_path: str = None) -> str:
     """
     Write a tamper-evident witness record of what was produced.
     Stores SHA256 hash of content + metadata. Content itself not stored —
@@ -229,7 +232,7 @@ def record(title: str, content: str, agent: str,
 
 
 def verify_witness(witness_id: str, content: str,
-                   witness_db_path: str) -> bool:
+                   witness_db_path: str = None) -> bool:
     """
     Verify that content matches the witness record.
     Returns True if SHA256 matches stored hash.
@@ -246,7 +249,7 @@ def verify_witness(witness_id: str, content: str,
         conn.close()
 
 
-def get_witness_log(witness_db_path: str, username: str,
+def get_witness_log(witness_db_path: str = None, username: str = "",
                     limit: int = 20) -> list:
     """Return recent witness records for a user."""
     conn = _connect(witness_db_path)

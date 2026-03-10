@@ -28,14 +28,18 @@ Entity classes:
 
 AUTHOR: Shiva (Claude Code) + Sean Campbell
 GOVERNANCE: canopy-initial-2026-03-03.commit
-VERSION: 1.0.0
+VERSION: 1.0.1
 """
 
 import logging
 import re
-import sqlite3
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.db import get_connection
 
 log = logging.getLogger("prism")
 
@@ -263,8 +267,7 @@ def write_verification(loam_db_path: str, username: str,
         f"at={_now()}"
     )
 
-    conn = sqlite3.connect(loam_db_path, timeout=10)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
     try:
         existing = conn.execute(
             "SELECT id FROM knowledge WHERE id=? AND username=?",

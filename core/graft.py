@@ -1,45 +1,38 @@
 """
 Kart Task Management System
 
-SQLite-backed task storage for Kart orchestration.
+PostgreSQL-backed task storage for Kart orchestration.
 Mimics Claude Code's TaskList functionality.
 
 GOVERNANCE: Task operations logged and auditable
 AUTHOR: Kart Orchestration System
-VERSION: 1.0
+VERSION: 1.1
 CHECKSUM: ΔΣ=42
 """
 
-import sqlite3
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-# Database path per user
-def _db_path(username: str) -> Path:
-    """Get path to user's graft database."""
-    base = Path.cwd() / "artifacts" / username
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "graft.db"
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.db import get_connection
 
 
-def _connect(username: str) -> sqlite3.Connection:
+def _connect(username: str):
     """Open connection to graft database."""
-    path = _db_path(username)
-    conn = sqlite3.connect(path, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
     return conn
 
 
 def init_db(username: str):
     """Initialize graft database schema."""
     conn = _connect(username)
-    conn.executescript("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             task_id TEXT UNIQUE NOT NULL,
             subject TEXT NOT NULL,
             description TEXT NOT NULL,
@@ -49,23 +42,22 @@ def init_db(username: str):
             updated_at TEXT NOT NULL,
             completed_at TEXT,
             metadata TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-        CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent);
-        CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
-
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at)")
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS task_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             task_id TEXT NOT NULL,
             timestamp TEXT NOT NULL,
             action TEXT NOT NULL,
             agent TEXT NOT NULL,
             details TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_log_task ON task_log(task_id);
+        )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_log_task ON task_log(task_id)")
     conn.commit()
     conn.close()
 
