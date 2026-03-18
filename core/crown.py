@@ -48,9 +48,7 @@ def _now() -> str:
 
 
 def _connect(db_path: str = None):
-    conn = get_connection()
-    conn.row_factory = __import__('sqlite3').Row
-    return conn
+    return get_connection()
 
 
 # ---------------------------------------------------------------------------
@@ -199,13 +197,41 @@ def artifact(content: str, title: str, source_type: str,
 # Witness — formal tamper-evident record
 # ---------------------------------------------------------------------------
 
+_witness_table_ready = False
+
+
+def _ensure_witness_table(conn):
+    """Lazy init — create witness_log if it doesn't exist yet."""
+    global _witness_table_ready
+    if _witness_table_ready:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS witness_log (
+            witness_id  TEXT PRIMARY KEY,
+            username    TEXT NOT NULL,
+            agent       TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            content_len INTEGER NOT NULL,
+            produced_at TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wlog_user ON witness_log(username, produced_at)"
+    )
+    conn.commit()
+    _witness_table_ready = True
+
+
 def record(title: str, content: str, agent: str,
-           username: str, witness_db_path: str = None) -> str:
+           username: str, witness_db_path: str = None,
+           conn=None) -> str:
     """
     Write a tamper-evident witness record of what was produced.
     Stores SHA256 hash of content + metadata. Content itself not stored —
     only its hash, length, and identity.
 
+    Pass conn= to reuse an existing connection (avoids leak in loops).
     Returns witness_id (hex string).
     """
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -213,8 +239,11 @@ def record(title: str, content: str, agent: str,
         f"{username}:{agent}:{title}:{content_hash}:{_now()}".encode()
     ).hexdigest()[:32]
 
-    conn = _connect(witness_db_path)
+    own_conn = conn is None
+    if own_conn:
+        conn = _connect(witness_db_path)
     try:
+        _ensure_witness_table(conn)
         conn.execute(
             """INSERT OR IGNORE INTO witness_log
                (witness_id, username, agent, title, content_hash,
@@ -223,10 +252,12 @@ def record(title: str, content: str, agent: str,
             (witness_id, username, agent, title, content_hash,
              len(content), _now())
         )
-        conn.commit()
+        if own_conn:
+            conn.commit()
         log.debug(f"CROWN: witnessed {title!r} id={witness_id[:12]}")
     finally:
-        conn.close()
+        if own_conn:
+            conn.close()
 
     return witness_id
 
@@ -262,6 +293,41 @@ def get_witness_log(witness_db_path: str = None, username: str = "",
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Entity Lifecycle Witness — tamper-evident audit for context layer
+# ---------------------------------------------------------------------------
+
+def witness_entity_event(event_type: str, entity_name: str,
+                         agent: str, username: str,
+                         details: dict = None,
+                         conn=None) -> str:
+    """
+    Witness an entity lifecycle event. Tamper-evident.
+    Returns witness_id.
+
+    Uses record() internally — same SHA256 chain.
+    Pass conn= to reuse an existing connection (avoids leak in loops).
+
+    Event types:
+      entity_chrome_flagged     — new entity born with never_promote=1
+      entity_chrome_retroactive — migration flags existing entity
+      entity_promoted_1_2       — auto-promotion layer 1→2
+      entity_promoted_2_3       — human ratifies layer 2→3
+      edge_archived             — edge moved to archive table
+      agent_conversation        — agent-to-agent message witnessed
+    """
+    content = json.dumps({
+        "event": event_type,
+        "entity": entity_name,
+        "details": details or {},
+        "timestamp": _now(),
+    }, indent=2)
+
+    title = f"entity:{event_type}:{entity_name}"
+    return record(title=title, content=content,
+                  agent=agent, username=username, conn=conn)
 
 
 # ---------------------------------------------------------------------------

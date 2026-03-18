@@ -1,0 +1,55 @@
+PROPOSAL: graft-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILE: core/graft.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of GRAFT — the task management layer.
+
+GRAFT governs what gets done. It's the work queue for the entire system:
+agents create tasks, tasks route to executors, conflicts are arbitrated by
+priority, flow control handles dependencies, and every state change is logged.
+
+DESIGN DECISIONS
+----------------
+1. Caller provides db_path (artifacts/{username}/graft.db). No path logic inside.
+2. try/finally on every connection.
+3. Priority: int 0–10. Higher = sooner. Default 5. next_task() returns highest
+   priority pending task with no unresolved dependencies.
+4. Governance tier tracked but not enforced here — enforcement is the caller's job.
+   T1=human approval required, T2=log+auto, T3=proceed. Stored for auditability.
+5. Dependency chain: task B blocked_by task A. next_task() skips blocked tasks.
+6. State machine: pending → in_progress → completed | failed | cancelled
+   Also: blocked (all dependencies not yet completed).
+7. Audit log: every state transition logged to task_log with agent + notes.
+8. FIFO within same priority: created_at ASC as tiebreaker.
+
+PUBLIC API
+----------
+init_tables(db_path) → None
+
+create(db_path, username, subject, description, agent,
+       priority=5, tier=2, metadata=None) → str  # returns task_id
+
+get(db_path, task_id) → Optional[dict]
+list_tasks(db_path, username, agent=None, status=None, limit=50) → list[dict]
+update(db_path, task_id, status, agent, notes=None) → bool
+cancel(db_path, task_id, agent, reason=None) → bool
+delete(db_path, task_id) → bool
+
+next_task(db_path, username, agent) → Optional[dict]
+add_dependency(db_path, task_id, blocked_by_id) → None
+get_log(db_path, task_id) → list[dict]
+stats(db_path, username, agent=None) → dict
+
+SCHEMA
+------
+tasks     — (task_id TEXT PK, username, subject, description, status,
+             agent, priority INT, tier INT, created_at, updated_at,
+             completed_at, metadata TEXT)
+task_deps — (task_id, blocked_by_id, PRIMARY KEY(task_id, blocked_by_id))
+task_log  — (id, task_id, timestamp, action, agent, notes)
+
+GOVERNANCE: rings-initial-2026-03-03.applied

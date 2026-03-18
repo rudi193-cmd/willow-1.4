@@ -1,177 +1,253 @@
 """
-willow_paths.py — Runtime path resolution for Willow.
+willow_paths.py — Canonical path definitions for Willow.
 
-Willow discovers where it is. Nothing is hardcoded.
+Two roots:
+
+  WILLOW_HOME  — user-visible folder, lives in the OS home directory.
+                 Windows: C:\\Users\\{name}\\Willow\\
+                 Mac/Linux: ~/Willow/
+                 Easy to find in File Explorer / Finder.
+                 Cloud sync: just move it into Google Drive / iCloud / Dropbox.
+                 Willow doesn't manage the sync — the OS does.
+
+  WILLOW_CONFIG — hidden machine config. Never browsed by the user.
+                  Always: ~/.willow/
+
+Everything that a user would want to find goes under WILLOW_HOME.
+Everything that is machine-level config goes under WILLOW_CONFIG.
 
 Usage:
-    from core.willow_paths import WILLOW_ROOT, user_data, tmp_path
-
-All modules import from here instead of hardcoding paths.
-.env overrides are always respected.
+    from core.willow_paths import willow_home, willow_config, user_dir, nest_dir
 """
 
 import os
-import tempfile
+import sys
 from pathlib import Path
-from dotenv import load_dotenv
-
-# Load .env from wherever we find it — before anything else
-def _load_env():
-    candidate = Path(__file__).resolve()
-    for parent in [candidate, *candidate.parents]:
-        env_file = parent / ".env"
-        if env_file.exists():
-            load_dotenv(env_file, override=False)
-            return
-_load_env()
 
 
-# ── Root discovery ─────────────────────────────────────────────────────────────
+# ── Root resolution ────────────────────────────────────────────────────────────
 
-def find_willow_root() -> Path:
+def _find_home_root() -> Path:
     """
-    Walk up from this file until we find server.py.
-    That directory is WILLOW_ROOT.
-
-    Override with WILLOW_ROOT env var if set.
+    Resolve the OS home directory.
+    On WSL, prefer the Windows user home over the Linux home.
+    Override with WILLOW_HOME env var.
     """
-    override = os.getenv("WILLOW_ROOT", "").strip()
+    override = os.getenv("WILLOW_HOME", "").strip()
     if override:
-        p = Path(override)
-        if p.exists():
-            return p.resolve()
+        return Path(override)
 
+    # WSL: use the Windows home so the folder appears in Windows Explorer
+    if sys.platform == "linux" and Path("/mnt/c/Users").exists():
+        win_user = os.getenv("WSLENV", "")
+        # Try to find the Windows username from the mounted path
+        win_home_candidates = list(Path("/mnt/c/Users").iterdir())
+        # Filter out system accounts
+        skip = {"All Users", "Default", "Default User", "Public", "desktop.ini"}
+        real_users = [p for p in win_home_candidates
+                      if p.is_dir() and p.name not in skip]
+        if len(real_users) == 1:
+            return real_users[0] / "Willow"
+        # Multiple users — fall back to matching the Linux username
+        linux_user = os.getenv("USER", "")
+        for p in real_users:
+            if p.name.lower() == linux_user.lower():
+                return p / "Willow"
+
+    # Standard: ~/Willow
+    return Path.home() / "Willow"
+
+
+def _find_config_root() -> Path:
+    """
+    ~/.willow — hidden machine config directory.
+    Override with WILLOW_CONFIG env var.
+    """
+    override = os.getenv("WILLOW_CONFIG", "").strip()
+    if override:
+        return Path(override)
+    return Path.home() / ".willow"
+
+
+# ── Module-level roots ─────────────────────────────────────────────────────────
+
+def willow_home() -> Path:
+    """
+    User-visible Willow folder. Created on first access.
+    Windows: C:\\Users\\{name}\\Willow\\
+    Mac/Linux: ~/Willow/
+    """
+    p = _find_home_root()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def willow_config() -> Path:
+    """
+    Hidden machine config directory. Created on first access.
+    Always: ~/.willow/
+    """
+    p = _find_config_root()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ── User paths (under WILLOW_HOME) ────────────────────────────────────────────
+
+def user_dir(username: str) -> Path:
+    """
+    Per-user directory. Created on first access.
+    {willow_home}/users/{username}/
+    """
+    p = willow_home() / "users" / username
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def user_pickup(username: str) -> Path:
+    """
+    Willow writes outputs here — handoffs, reports, agent responses.
+    {willow_home}/users/{username}/pickup/
+    """
+    p = user_dir(username) / "pickup"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def user_drop(username: str) -> Path:
+    """
+    User drops files here for Willow to intake.
+    {willow_home}/users/{username}/drop/
+    """
+    p = user_dir(username) / "drop"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def user_journal(username: str) -> Path:
+    """
+    Journal exports — human-readable, browsable.
+    {willow_home}/users/{username}/journal/
+    """
+    p = user_dir(username) / "journal"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def user_profile(username: str) -> Path:
+    """
+    User profile documents — ECOSYSTEM.md, PREFERENCES.md, etc.
+    {willow_home}/users/{username}/profile/
+    """
+    p = user_dir(username) / "profile"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ── Nest (Pigeon inbox) ────────────────────────────────────────────────────────
+
+def nest_dir() -> Path:
+    """
+    Pigeon message drop zone. Cloud apps write here; Willow reads and routes.
+    {willow_home}/Nest/
+    """
+    p = willow_home() / "Nest"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def nest_inbox(app_id: str) -> Path:
+    """
+    Inbox for a specific app.
+    {willow_home}/Nest/inbox/{app_id}/
+    """
+    p = nest_dir() / "inbox" / app_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ── Config paths (under ~/.willow) ────────────────────────────────────────────
+
+def config_file() -> Path:
+    """~/.willow/config.json"""
+    return willow_config() / "config.json"
+
+
+def logs_dir() -> Path:
+    """~/.willow/logs/"""
+    p = willow_config() / "logs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def sessions_dir() -> Path:
+    """~/.willow/sessions/"""
+    p = willow_config() / "sessions"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def seeds_dir() -> Path:
+    """~/.willow/seeds/"""
+    p = willow_config() / "seeds"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ── Repo paths (for server-side code that needs to find the repo) ──────────────
+
+def _find_repo_root() -> Path:
+    """Walk up from this file until we find server.py."""
+    override = os.getenv("WILLOW_ROOT", "").strip()
+    if override and Path(override).exists():
+        return Path(override).resolve()
     candidate = Path(__file__).resolve()
     for parent in [candidate, *candidate.parents]:
         if (parent / "server.py").exists():
             return parent
-
     raise RuntimeError(
-        "Cannot locate Willow root. Is willow_paths.py inside the Willow repo?\n"
-        "Set WILLOW_ROOT in your .env to override."
+        "Cannot locate Willow repo root. Set WILLOW_ROOT env var to override."
     )
 
 
-# ── Module-level root — resolved once at import ────────────────────────────────
+def repo_root() -> Path:
+    """The Willow repository root (contains server.py)."""
+    return _find_repo_root()
 
-WILLOW_ROOT: Path = find_willow_root()
 
-
-# ── User paths ─────────────────────────────────────────────────────────────────
-
-def user_data(username: str) -> Path:
+def artifacts_dir(username: str) -> Path:
     """
-    Persistent user data directory.
-    WILLOW_ROOT/artifacts/{username}/
-    Created if it doesn't exist.
+    Server-side artifacts — DBs, agent profiles, etc.
+    {repo_root}/artifacts/{username}/
+    NOT user-visible. Not synced to cloud.
     """
-    p = WILLOW_ROOT / "artifacts" / username
+    p = repo_root() / "artifacts" / username
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def user_db(username: str, name: str = "willow_knowledge.db") -> Path:
-    """
-    Path to a user's SQLite database.
-    WILLOW_ROOT/artifacts/{username}/{name}
-    """
-    return user_data(username) / name
-
-
-def user_journal_dir(username: str) -> Path:
-    """
-    Journal session files.
-    WILLOW_ROOT/artifacts/{username}/journal/
-    """
-    p = user_data(username) / "journal"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-# ── Temp paths ─────────────────────────────────────────────────────────────────
-
-def tmp_dir(username: str = "") -> Path:
-    """
-    Temp directory for this user.
-    {system_tmp}/willow/{username}/
-    Created if it doesn't exist.
-    """
-    base = Path(tempfile.gettempdir()) / "willow"
-    if username:
-        base = base / username
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-
-def tmp_path(filename: str, username: str = "") -> Path:
-    """
-    Path to a named temp file.
-    {system_tmp}/willow/{username}/{filename}
-    """
-    return tmp_dir(username) / filename
-
-
-def journal_session_tmp(username: str, session_id: str) -> Path:
-    """
-    Live JSONL path for an active journal session.
-    Written to during the session, resolved on close.
-    {system_tmp}/willow/{username}/journal_{session_id}.jsonl
-    """
-    return tmp_path(f"journal_{session_id}.jsonl", username)
-
-
-def orphaned_journal_sessions(username: str) -> list[Path]:
-    """
-    Find JSONL files in tmp that were never closed (crash/disconnect recovery).
-    Returns list of Path objects, newest first.
-    """
-    d = tmp_dir(username)
-    files = sorted(d.glob("journal_*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
-    return files
-
-
-# ── Core paths ─────────────────────────────────────────────────────────────────
-
-def core_path(*parts) -> Path:
-    """Path inside WILLOW_ROOT/core/"""
-    return WILLOW_ROOT / "core" / Path(*parts)
-
-
-def web_path(*parts) -> Path:
-    """Path inside WILLOW_ROOT/web/"""
-    return WILLOW_ROOT / "web" / Path(*parts)
-
-
-def governance_path(*parts) -> Path:
-    """Path inside WILLOW_ROOT/governance/"""
-    return WILLOW_ROOT / "governance" / Path(*parts)
-
-
-# ── Shiva DB ───────────────────────────────────────────────────────────────────
-
-def shiva_db() -> Path:
-    """
-    Shiva's memory database.
-    Override with SHIVA_DB env var.
-    """
-    override = os.getenv("SHIVA_DB", "").strip()
-    if override:
-        return Path(override)
-    return WILLOW_ROOT / "shiva_memory" / "shiva.db"
+def knowledge_db(username: str) -> Path:
+    """Path to user's SQLite knowledge DB (server-side)."""
+    return artifacts_dir(username) / "willow_knowledge.db"
 
 
 # ── Diagnostics ────────────────────────────────────────────────────────────────
 
-def report() -> dict:
-    """Return all resolved paths for diagnostics."""
+def report(username: str = "Sweet-Pea-Rudi19") -> dict:
+    """Return all resolved paths. Useful for debugging."""
     return {
-        "willow_root":  str(WILLOW_ROOT),
-        "core":         str(core_path()),
-        "web":          str(web_path()),
-        "governance":   str(governance_path()),
-        "shiva_db":     str(shiva_db()),
-        "tmp_dir":      str(tmp_dir()),
-        "env_override": os.getenv("WILLOW_ROOT", "(none)"),
+        "willow_home":    str(willow_home()),
+        "willow_config":  str(willow_config()),
+        "user_dir":       str(user_dir(username)),
+        "user_pickup":    str(user_pickup(username)),
+        "user_drop":      str(user_drop(username)),
+        "user_journal":   str(user_journal(username)),
+        "user_profile":   str(user_profile(username)),
+        "nest_dir":       str(nest_dir()),
+        "nest_inbox":     str(nest_inbox("example-app")),
+        "repo_root":      str(repo_root()),
+        "artifacts_dir":  str(artifacts_dir(username)),
+        "knowledge_db":   str(knowledge_db(username)),
     }
 
 

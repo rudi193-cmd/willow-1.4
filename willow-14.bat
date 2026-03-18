@@ -32,22 +32,30 @@ echo.
 echo Starting daemons...
 echo.
 
-echo [1/4] Pigeon daemon...
+echo [1/5] Pigeon daemon...
 start "Willow-Pigeon" /MIN cmd /c "cd /d "%WILLOW%" && "%VENV%" core/pigeon_daemon.py"
 
-echo [2/4] OCR consumer...
+echo [2/5] OCR consumer...
 start "Willow-OCR" /MIN cmd /c "cd /d "%WILLOW%" && "%VENV%" core/ocr_consumer_daemon.py"
 
-echo [3/4] Inbox watcher...
+echo [3/5] Inbox watcher...
 start "Willow-Inbox" /MIN cmd /c "cd /d "%WILLOW%" && "%VENV%" tools/inbox_watcher.py"
 
-echo [4/4] MCP server...
+echo [4/5] MCP server...
 start "Willow-MCP" /MIN cmd /c "cd /d "%WILLOW%" && "%VENV%" mcp/willow_server.py"
 
-REM ── Open journal ──
+echo [5/5] Drive watcher...
+if exist "%USERPROFILE%\My Drive\" (
+    start "Willow-Drive" /MIN cmd /c "cd /d "%WILLOW%" && "%VENV%" core/pigeon_drive_watcher.py --watch --interval 10"
+) else (
+    echo       Drive folder not found — skipping
+)
+
+REM ── Open browser ──
 timeout /t 2 >nul
 echo.
-echo [*] Opening journal...
+echo [*] Opening Willow + journal...
+start "" "http://localhost:8420/"
 start "" "http://localhost:2121/journal/"
 
 echo.
@@ -55,7 +63,7 @@ echo ========================================
 echo  Willow is running.
 echo  Willow:  http://localhost:8420/
 echo  Journal: http://localhost:2121/journal/
-echo  Daemons: pigeon, ocr, inbox, mcp
+echo  Daemons: pigeon, ocr, inbox, mcp, drive(if present)
 echo ========================================
 echo.
 echo To stop: close this window or run stop_daemons.bat

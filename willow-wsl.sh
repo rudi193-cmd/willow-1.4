@@ -142,17 +142,17 @@ start_daemon "willow" "$WILLOW_DIR" \
     "$PYTHON -m uvicorn server:app --host 0.0.0.0 --port 8420 --workers 4 --log-level info"
 wait_http "http://127.0.0.1:8420/api/health" "Willow :8420"
 
-# ── 2. Shiva journal server (2121) ────────────────────────────────────────────
+# ── 2. Willow 1.4 journal server (2121) ──────────────────────────────────────
 
-echo "[2/6] Shiva journal :2121..."
-start_daemon "shiva" "$WILLOW_DIR" \
-    "$PYTHON agents/shiva/server.py"
+echo "[2/6] Journal server :2121..."
+start_daemon "shiva" "$W14_DIR" \
+    "$PYTHON -m uvicorn server:app --host 0.0.0.0 --port 2121 --log-level info"
 sleep 3
 pf="$(pid_file shiva)"
 if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
     echo "      OK. http://127.0.0.1:2121"
 else
-    echo "      [WARN] Shiva exited early — check $LOG_DIR/shiva.log"
+    echo "      [WARN] Journal server exited early — check $LOG_DIR/shiva.log"
 fi
 
 # ── 3. Pigeon daemon ──────────────────────────────────────────────────────────
@@ -175,13 +175,16 @@ start_daemon "inbox" "$WILLOW_DIR" "$PYTHON tools/inbox_watcher.py"
 echo "[6/6] MCP server..."
 start_daemon "mcp" "$WILLOW_DIR" "$PYTHON mcp/willow_server.py"
 
-# ── Drive watcher (optional — needs Drive folder mounted) ─────────────────────
+# ── Drive watcher (optional — needs Google Drive mounted at /mnt/c/Users/*/My Drive) ──
 
 DRIVE_WATCHER="$WILLOW_DIR/core/pigeon_drive_watcher.py"
-if [ -f "$DRIVE_WATCHER" ]; then
+DRIVE_PATH_CHECK="/mnt/c/Users/Sean/My Drive"
+if [ -f "$DRIVE_WATCHER" ] && [ -d "$DRIVE_PATH_CHECK" ]; then
     echo "[+]   Drive watcher..."
     start_daemon "drive_watcher" "$WILLOW_DIR" \
         "$PYTHON core/pigeon_drive_watcher.py --watch --interval 10"
+else
+    echo "      Drive watcher skipped (Drive not mounted or watcher not found)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

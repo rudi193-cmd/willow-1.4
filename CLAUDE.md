@@ -19,22 +19,49 @@ In the Willow pantheon:
 
 ## This Repo
 
-Willow 1.4 is the clean build. The ecosystem rename is complete:
+Willow 1.4 is the clean build. Synced from production Willow (Postgres, 2026-03-17).
 
-| Acrostic | File | Zone |
-|----------|------|------|
-| SOIL = Sense, Observe, Intake, Listen | soil.py | Root Zone |
-| LOAM = Ledger, Organic, Archive, Memory | loam.py | Root Zone |
-| VINE = Vector, Identify, Network, Entity | vine.py | Root Zone |
-| RINGS = Receive, Interpret, Navigate, Generate, Steer | rings.py | Trunk |
-| GRAFT = Govern, Route, Arbitrate, Flow, Tasks | graft.py | Trunk |
-| PULSE = Process, Unify, Loop, Schedule, Execute | pulse.py | Trunk |
-| LEAF = Library, External, Archive, Fetch | leaf.py | Canopy |
-| PRISM = Prove, Reference, Inspect, Source, Match | prism.py | Canopy |
-| CROWN = Compose, Release, Output, Witness, Nurture | crown.py | Canopy |
+### Zone Architecture (9 acrostic tissue files)
 
-**CROWN is also the launch benchmark:**
-Compose ✅ | Release ✅ | Output ✅ | Witness ⚠️ | Nurture ❌
+| Acrostic | File | Zone | Satellites |
+|----------|------|------|------------|
+| SOIL = Sense, Observe, Intake, Listen | soil.py | Root | ocr_consumer, ocr_consumer_daemon, extraction, atom_extractor, classifier, nest_intake |
+| LOAM = Ledger, Organic, Archive, Memory | loam.py | Root | knowledge, embeddings, conversation_rag |
+| VINE = Vector, Identify, Network, Entity | vine.py | Root | topology, topology_builder |
+| RINGS = Receive, Interpret, Navigate, Generate, Steer | rings.py | Trunk | llm_router, fleet_feedback, fleet_retry, provider_health, cost_tracker, credentials |
+| GRAFT = Govern, Route, Arbitrate, Flow, Tasks | graft.py | Trunk | gate, state, coherence, coherence_scanner, agent_registry, agent_engine, agent_auth |
+| PULSE = Process, Unify, Loop, Schedule, Execute | pulse.py | Trunk | persona_scheduler, compost, daemon_config, message_bus |
+| LEAF = Library, External, Archive, Fetch | leaf.py | Canopy | safe_sync, web_search, map_system |
+| PRISM = Prove, Reference, Inspect, Source, Match | prism.py | Canopy | checksum_chain |
+| CROWN = Compose, Release, Output, Witness, Nurture | crown.py | Canopy | tts_router |
+
+### Named Infrastructure (keep their names — not tissue)
+
+| File | Role |
+|------|------|
+| db.py | Foundation — PostgreSQL connection layer |
+| pigeon.py | Named persona — vascular system |
+| pigeon_daemon.py | Pigeon background daemon |
+| willow_paths.py | Config — path resolution |
+| tool_engine.py | Agent plumbing — tool execution |
+| command_parser.py | Agent plumbing — command parsing |
+| roots_config.py | Config — system roots |
+| storage.py | Foundation — file storage |
+| seed_packet.py | Continuity — session packets |
+| user_lattice.py | Foundation — user permissions |
+
+### Additional Runtime
+
+awareness, boot_sequence, breath, compact, compact_client, composio_provider,
+context_injector, conversational_handler, analysis_handler, delta_tracker,
+ecosystem_writer, file_annotations, file_organizer, filename_sanitizer,
+health, job_queue, journal_engine, kart_startup, n2n_db, n2n_packets,
+patterns, recursion_tracker, request_manager, shell_adapter,
+time_resume_capsule, user_registration, workflow_state
+
+### CROWN Launch Benchmark
+
+Compose ✅ | Release ✅ | Output ✅ | Witness ✅ | Nurture ⚠️
 
 **Tissue gets acrostics. Personas keep their names.**
 (Pigeon, Willow, Kart, Shiva, Ganesha — never renamed)

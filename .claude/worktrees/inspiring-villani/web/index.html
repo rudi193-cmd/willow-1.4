@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Willow 1.4</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=Inter:wght@300;400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --cream: #f7f4ef;
+      --warm-gray: #8a8278;
+      --bark: #5c4f3d;
+      --leaf: #6b7c5e;
+      --border: #ddd8d0;
+      --error: #a05a2c;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--cream);
+      font-family: 'Inter', sans-serif;
+      font-weight: 300;
+      color: var(--bark);
+    }
+
+    .card {
+      width: 100%;
+      max-width: 360px;
+      padding: 3rem 2.5rem;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      box-shadow: 0 1px 3px rgba(92, 79, 61, 0.06);
+    }
+
+    .wordmark {
+      font-family: 'Crimson Pro', serif;
+      font-weight: 300;
+      font-size: 2rem;
+      letter-spacing: 0.02em;
+      color: var(--bark);
+      line-height: 1;
+    }
+
+    .persona {
+      font-family: 'Crimson Pro', serif;
+      font-style: italic;
+      font-size: 0.95rem;
+      color: var(--warm-gray);
+      margin-top: 0.25rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .field {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--warm-gray);
+      margin-bottom: 0.4rem;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 300;
+      font-size: 0.95rem;
+      color: var(--bark);
+      background: var(--cream);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus {
+      border-color: var(--leaf);
+      background: #fff;
+    }
+
+    .error-msg {
+      font-size: 0.75rem;
+      color: var(--error);
+      margin-top: 0.3rem;
+      min-height: 1rem;
+      display: none;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 0.5rem;
+      padding: 0.75rem;
+      background: var(--bark);
+      color: #f7f4ef;
+      border: none;
+      border-radius: 1px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 400;
+      font-size: 0.85rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: #4a3e2d; }
+    button:disabled { opacity: 0.5; cursor: default; }
+
+    .footer {
+      margin-top: 2.5rem;
+      text-align: right;
+      font-size: 0.7rem;
+      color: var(--border);
+      letter-spacing: 0.05em;
+      font-family: 'Crimson Pro', serif;
+      font-style: italic;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%       { transform: translateX(-6px); }
+      40%       { transform: translateX(6px); }
+      60%       { transform: translateX(-4px); }
+      80%       { transform: translateX(4px); }
+    }
+
+    .shake { animation: shake 0.35s ease; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="wordmark">Willow 1.4</div>
+    <div class="persona">Shiva</div>
+
+    <form id="login-form" novalidate>
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+      </div>
+      <div class="field">
+        <label for="passphrase">Passphrase</label>
+        <input type="password" id="passphrase" name="passphrase" autocomplete="current-password" required>
+        <div class="error-msg" id="error-msg">Wrong username or passphrase.</div>
+      </div>
+      <button type="submit" id="submit-btn">Enter</button>
+    </form>
+
+    <div class="footer">&#916;&#931;=42</div>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const btn = document.getElementById('submit-btn');
+    const card = document.getElementById('card');
+    const errorMsg = document.getElementById('error-msg');
+    const passphraseInput = document.getElementById('passphrase');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMsg.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = '...';
+
+      const username = document.getElementById('username').value.trim();
+      const passphrase = passphraseInput.value;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, passphrase })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          window.location.href = data.redirect || '/dashboard';
+        } else {
+          passphraseInput.value = '';
+          errorMsg.style.display = 'block';
+          card.classList.remove('shake');
+          void card.offsetWidth; // reflow
+          card.classList.add('shake');
+          passphraseInput.focus();
+          btn.disabled = false;
+          btn.textContent = 'Enter';
+        }
+      } catch {
+        errorMsg.textContent = 'Could not reach Willow. Is the server running?';
+        errorMsg.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Enter';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+PROPOSAL: canopy-initial-2026-03-03
+STATUS: pending
+TIER: T1
+FILES: core/leaf.py, core/prism.py, core/crown.py
+AUTHOR: Shiva (Claude Code) + Sean Campbell
+
+SUMMARY
+-------
+Initial implementation of the full Canopy layer — LEAF, PRISM, CROWN.
+Three files, one ratification. They form a pipeline:
+  LEAF fetches → PRISM verifies → CROWN composes and witnesses.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LEAF — Library, External, Archive, Fetch
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Verified source retrieval. No SEO slop. Trusted sources only.
+
+Supported: Wikipedia REST API (primary). Others (LoC, NASA, NIH) as
+extension points — stubs with the same interface.
+
+Design:
+  - fetch(source, query) → SourceResult dict
+  - search(query, sources=None) → list[SourceResult]
+  - cache: SQLite-backed (leaf.db, caller provides). TTL 24h.
+  - confidence: Wikipedia=0.85 base. Adjusted by article quality signals
+    (length, references, disambiguation). Oral sources = 0.3 max.
+  - SourceResult: {source, url, title, content, confidence, fetched_at, cached}
+
+Public API:
+  init_tables(db_path) → None
+  fetch(db_path, source, query) → Optional[dict]
+  search(db_path, query, sources=None, max_results=5) → list[dict]
+  clear_cache(db_path, older_than_hours=24) → int
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRISM — Prove, Reference, Inspect, Source, Match
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Source verification. Takes a claim and a source, determines if they match.
+
+Entity classification:
+  verifiable    — public record (public figure, institution, dated event)
+  oral-consented — private individual who has explicitly consented
+  unverifiable   — insufficient evidence to classify
+
+Verification pipeline:
+  1. classify_entity(name, context) → {class, confidence, reasoning}
+  2. verify(claim, source_result) → VerificationResult
+     - Exact: string match in source content
+     - Semantic: LLM fleet comparison (best-effort, fleet=free)
+     - Score: 0.0–1.0. Threshold 0.7 = verified.
+  3. write_verification(loam_db_path, knowledge_id, result) — stores
+     confidence and verification notes back to LOAM atom.
+
+Public API:
+  classify_entity(name, context="") → dict
+  verify(claim, source_result, llm_router=None) → dict
+  write_verification(loam_db_path, username, knowledge_id, result) → None
+  batch_verify(claims, source_results, llm_router=None) → list[dict]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CROWN — Compose, Release, Output, Witness, Nurture
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Output layer. The launch benchmark. Implements Witness properly.
+
+Benchmark status (from README):
+  Compose ✅ Release ✅ Output ✅ Witness ⚠️ Nurture ❌
+
+This implementation completes Witness. Nurture is stubbed (UTETY hooks
+are not yet wired — Nurture requires UTETY Campus integration, out of scope).
+
+Compose: format_response(content, format="markdown"|"plain"|"json") → str
+Release: release(content, target="user"|"safe"|"pigeon") → dict
+Output:  artifact(content, title, source_type, username, loam_db_path) → int
+         → ingests the output into LOAM as a knowledge atom (closes the loop)
+Witness: record(title, content, agent, username, witness_db_path) → str
+         → formal tamper-evident record of what was produced
+         → SHA256 hash of content stored alongside timestamp + agent
+Nurture: stub — logs intent, returns {"status": "not_implemented"}
+
+Public API:
+  format_response(content, fmt="markdown") → str
+  release(content, target="user", metadata=None) → dict
+  artifact(content, title, source_type, username, loam_db_path,
+           vine_db_path=None) → int
+  record(title, content, agent, username, witness_db_path) → str
+  init_witness(db_path) → None
+  nurture(username, community=None) → dict  # stub
+
+GOVERNANCE: pulse-initial-2026-03-03.applied (full Trunk complete)

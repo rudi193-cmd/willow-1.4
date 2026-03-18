@@ -14,12 +14,10 @@ Sources:
   wikipedia — REST API, confidence 0.85 base
   (loc, nasa, nih — extension stubs, same interface)
 
-Results cached in leaf.db (SQLite, TTL 24h). Stale entries cleared on demand.
+Results cached in leaf_cache table (Postgres, TTL 24h). Stale entries cleared on demand.
 
-SourceResult fields:
+ SourceResult fields:
   source, url, title, content, confidence, fetched_at, cached (bool)
-
-DB: artifacts/{username}/leaf.db (caller provides path)
 
 AUTHOR: Shiva (Claude Code) + Sean Campbell
 GOVERNANCE: canopy-initial-2026-03-03.commit
@@ -28,12 +26,13 @@ VERSION: 1.0.0
 
 import json
 import logging
-import sqlite3
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from core.db import get_connection
 
 log = logging.getLogger("leaf")
 
@@ -56,20 +55,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
-    return conn
+def _connect(username: str = None):
+    """Return a Postgres connection, optionally scoped to a user schema."""
+    return get_connection(schema=username) if username else get_connection()
 
 
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 
-def init_tables(db_path: str) -> None:
+def init_tables(username: str = None) -> None:
     """Create LEAF cache table. Idempotent."""
-    conn = _connect(db_path)
+    conn = _connect(username)
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS leaf_cache (
@@ -94,10 +91,10 @@ def _cache_key(source: str, query: str) -> str:
     return f"{source}:{query.lower().strip()}"
 
 
-def _get_cached(db_path: str, source: str, query: str) -> Optional[dict]:
+def _get_cached(username: str, source: str, query: str) -> Optional[dict]:
     key = _cache_key(source, query)
     now = _now()
-    conn = _connect(db_path)
+    conn = _connect(username)
     try:
         row = conn.execute(
             "SELECT * FROM leaf_cache WHERE cache_key=? AND expires_at > ?",
@@ -110,11 +107,11 @@ def _get_cached(db_path: str, source: str, query: str) -> Optional[dict]:
         conn.close()
 
 
-def _set_cached(db_path: str, result: dict) -> None:
+def _set_cached(username: str, result: dict) -> None:
     key = _cache_key(result["source"], result["query"])
     expires = (datetime.now(timezone.utc)
                + timedelta(hours=CACHE_TTL_HOURS)).isoformat()
-    conn = _connect(db_path)
+    conn = _connect(username)
     try:
         conn.execute(
             """INSERT OR REPLACE INTO leaf_cache
@@ -247,16 +244,17 @@ _FETCHERS = {
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch(db_path: str, source: str, query: str) -> Optional[dict]:
+def fetch(username: str, source: str, query: str) -> Optional[dict]:
     """
     Fetch from a single trusted source. Returns SourceResult or None.
     Checks cache first (TTL 24h). Writes result to cache on success.
+    username is used for Postgres schema scoping.
     """
     if source not in _FETCHERS:
         log.warning(f"LEAF: unknown source {source!r}")
         return None
 
-    cached = _get_cached(db_path, source, query)
+    cached = _get_cached(username, source, query)
     if cached:
         return cached
 
@@ -264,13 +262,13 @@ def fetch(db_path: str, source: str, query: str) -> Optional[dict]:
     result = fetcher(query)
     if result:
         result["query"] = query
-        _set_cached(db_path, result)
+        _set_cached(username, result)
         log.debug(f"LEAF: fetched {source}/{query!r} conf={result['confidence']}")
 
     return result
 
 
-def search(db_path: str, query: str,
+def search(username: str, query: str,
            sources: Optional[list] = None,
            max_results: int = 5) -> list:
     """
@@ -283,7 +281,7 @@ def search(db_path: str, query: str,
     for source in targets:
         if len(results) >= max_results:
             break
-        result = fetch(db_path, source, query)
+        result = fetch(username, source, query)
         if result:
             results.append(result)
 
@@ -291,11 +289,11 @@ def search(db_path: str, query: str,
     return results[:max_results]
 
 
-def clear_cache(db_path: str, older_than_hours: int = 24) -> int:
+def clear_cache(username: str, older_than_hours: int = 24) -> int:
     """Remove expired cache entries. Returns count cleared."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(hours=older_than_hours)).isoformat()
-    conn = _connect(db_path)
+    conn = _connect(username)
     try:
         cur = conn.execute(
             "DELETE FROM leaf_cache WHERE expires_at < ?", (cutoff,)

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__willow__list_apps",
+      "mcp__willow__send_message",
+      "mcp__willow__check_inbox",
+      "mcp__willow__mark_message_read"
+    ]
+  }
+}

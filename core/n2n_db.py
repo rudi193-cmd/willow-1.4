@@ -1,23 +1,23 @@
 """
 N2N Database - Packet Inbox/Outbox Storage
 
-PostgreSQL-backed storage for node-to-node packet communication.
+SQLite-backed storage for node-to-node packet communication.
 Supports send, receive, and status tracking.
 
 GOVERNANCE: Governance-checked writes, read-only queries
 AUTHOR: Kart (via Claude Code)
-VERSION: 1.1
+VERSION: 1.0
 CHECKSUM: ΔΣ=42
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).parent.parent))
+from core.db import get_connection
 import json
-import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Any
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.db import get_connection
 
 
 class N2NDatabase:

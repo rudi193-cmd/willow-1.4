@@ -152,17 +152,17 @@ start_daemon "willow" "$WILLOW_DIR" \
     "$PYTHON -m uvicorn server:app --host 127.0.0.1 --port 8420 --workers 4 --log-level info"
 wait_http "http://127.0.0.1:8420/api/health" "Willow :8420"
 
-# ── 2. Shiva journal server (2121) ────────────────────────────────────────────
+# ── 2. Willow 1.4 journal server (2121) ──────────────────────────────────────
 
-echo "[2/7] Shiva journal :2121..."
-start_daemon "shiva" "$WILLOW_DIR" \
-    "$PYTHON agents/shiva/server.py"
+echo "[2/7] Journal server :2121..."
+start_daemon "shiva" "$W14_DIR" \
+    "$PYTHON -m uvicorn server:app --host 127.0.0.1 --port 2121 --log-level info"
 sleep 3
 pf="$(pid_file shiva)"
 if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
     echo "      OK. http://127.0.0.1:2121"
 else
-    echo "      [WARN] Shiva exited early — check $LOG_DIR/shiva.log"
+    echo "      [WARN] Journal server exited early — check $LOG_DIR/shiva.log"
 fi
 
 # ── 3. Pigeon daemon ──────────────────────────────────────────────────────────

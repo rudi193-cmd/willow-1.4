@@ -1,0 +1,16 @@
+.env
+.env.local
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+shiva_memory/
+
+# Runtime databases (SQLite + WAL)
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# User artifacts (runtime data, never committed)
+artifacts/

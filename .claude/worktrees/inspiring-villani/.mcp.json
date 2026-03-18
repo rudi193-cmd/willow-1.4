@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "willow": {
+      "command": "python",
+      "args": ["C:\\Users\\Sean\\Documents\\GitHub\\Willow\\mcp\\willow_server.py"],
+      "env": {
+        "WILLOW_URL": "http://127.0.0.1:8420"
+      }
+    }
+  }
+}

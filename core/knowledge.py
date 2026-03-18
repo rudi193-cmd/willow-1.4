@@ -20,7 +20,6 @@ CHECKSUM: DS=42
 import os
 import re
 import json
-import sqlite3
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -66,24 +65,19 @@ def _db_path(username: str) -> str:
 
 
 def _connect(username: str):
-    """Open knowledge DB. Uses PostgreSQL pool when configured, else per-user SQLite."""
-    from core.db import get_connection as _gc, is_postgres
-    if is_postgres():
-        return _gc()
-    path = _db_path(username)
-    conn = _gc(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    from core.db import get_connection
+    return get_connection()
 
 
 def init_db(username: str):
-    """Create tables if they don't exist. Idempotent. V2 clean schema."""
+    """No-op — schema managed by pg_schema.sql."""
+    return
     conn = _connect(username)
     cur = conn.cursor()
 
     # --- Schema version tracking ---
     cur.execute("""CREATE TABLE IF NOT EXISTS schema_versions (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         version     TEXT NOT NULL,
         description TEXT,
         applied_at  TEXT NOT NULL
@@ -91,7 +85,7 @@ def init_db(username: str):
 
     # --- Knowledge atoms (V2: all columns in initial CREATE TABLE) ---
     cur.execute("""CREATE TABLE IF NOT EXISTS knowledge (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         source_type     TEXT NOT NULL,
         source_id       TEXT NOT NULL,
         title           TEXT NOT NULL,
@@ -139,7 +133,7 @@ def init_db(username: str):
 
     # --- Entities (V2: all columns in initial CREATE TABLE) ---
     cur.execute("""CREATE TABLE IF NOT EXISTS entities (
-        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         name              TEXT NOT NULL UNIQUE,
         entity_type       TEXT NOT NULL,
         description       TEXT,
@@ -166,7 +160,7 @@ def init_db(username: str):
 
     # --- Conversation memory ---
     cur.execute("""CREATE TABLE IF NOT EXISTS conversation_memory (
-        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         knowledge_id       INTEGER REFERENCES knowledge(id),
         persona            TEXT,
         user_input         TEXT,
@@ -179,7 +173,7 @@ def init_db(username: str):
 
     # --- Knowledge gaps (the loss function) ---
     cur.execute("""CREATE TABLE IF NOT EXISTS knowledge_gaps (
-        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         query                    TEXT NOT NULL,
         source                   TEXT NOT NULL,
         gap_type                 TEXT NOT NULL,
@@ -198,6 +192,81 @@ def init_db(username: str):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge(category)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_entities_username_domain ON entities(username, domain)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_entities_promotion ON entities(promotion_status)")
+
+    # 23³ Cube Index — derived spatial index (see CUBE_INDEX_SPEC.md)
+    cur.execute("""CREATE TABLE IF NOT EXISTS cube_cells (
+        id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        node_id       INTEGER NOT NULL,
+        node_type     TEXT NOT NULL CHECK (node_type IN ('knowledge', 'entity')),
+        cx            INTEGER NOT NULL CHECK (cx BETWEEN 0 AND 22),
+        cy            INTEGER NOT NULL CHECK (cy BETWEEN 1 AND 23),
+        cz            INTEGER NOT NULL CHECK (cz BETWEEN 0 AND 22),
+        domain_name   TEXT NOT NULL,
+        temporal_name TEXT NOT NULL,
+        indexed_at    TEXT NOT NULL,
+        UNIQUE (node_id, node_type)
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cube_xyz  ON cube_cells(cx, cy, cz)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cube_type ON cube_cells(node_type)")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS registered_apps (
+        app_id        TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        description   TEXT,
+        version       TEXT,
+        permissions   TEXT,
+        privacy_tier  TEXT,
+        manifest_path TEXT,
+        registered_at TEXT NOT NULL
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS app_consent (
+        id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        username    TEXT NOT NULL,
+        app_id      TEXT NOT NULL,
+        consented   INTEGER NOT NULL DEFAULT 0,
+        granted_at  TEXT,
+        revoked_at  TEXT,
+        UNIQUE (username, app_id)
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_consent_user ON app_consent(username)")
+
+    # --- Calendar events ---
+    cur.execute("""CREATE TABLE IF NOT EXISTS calendar_events (
+        id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        username    TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        description TEXT,
+        start_dt    TEXT NOT NULL,
+        end_dt      TEXT,
+        all_day     INTEGER DEFAULT 0,
+        category    TEXT DEFAULT 'personal',
+        recurrence  TEXT,
+        status      TEXT DEFAULT 'active',
+        source      TEXT DEFAULT 'manual',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_username ON calendar_events(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_start ON calendar_events(start_dt)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_status ON calendar_events(status)")
+
+    # --- Personal todos (separate from Ganesha's operational tasks) ---
+    cur.execute("""CREATE TABLE IF NOT EXISTS personal_todos (
+        id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        username    TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        description TEXT,
+        due_date    TEXT,
+        priority    TEXT DEFAULT 'normal',
+        status      TEXT DEFAULT 'open',
+        category    TEXT DEFAULT 'personal',
+        source      TEXT DEFAULT 'manual',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_todo_username ON personal_todos(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_todo_status ON personal_todos(status)")
 
     conn.commit()
     conn.close()
@@ -299,22 +368,31 @@ def _extract_entities_llm(text: str) -> List[Dict]:
     return []
 
 
-def _upsert_entities(conn: sqlite3.Connection, knowledge_id: int, entities: List[Dict]):
-    """Insert/update entities and link them to a knowledge atom."""
+def _upsert_entities(conn, knowledge_id: int, entities: List[Dict],
+                     context_tags: dict = None):
+    """Insert/update entities and link them to a knowledge atom.
+    Delegates to loam._upsert_entities for chrome detection + Crown witness."""
+    try:
+        from core.loam import _upsert_entities as _loam_upsert
+        _loam_upsert(conn, knowledge_id, entities, context_tags=context_tags)
+        return
+    except ImportError:
+        pass
+
+    # Fallback if loam not available
     cur = conn.cursor()
     for ent in entities:
         name = ent["name"]
         etype = ent.get("type", "concept")
-
-        # Upsert entity
         cur.execute(
             "INSERT INTO entities (name, entity_type, mention_count) VALUES (?, ?, 1) "
-            "ON CONFLICT(name) DO UPDATE SET mention_count = mention_count + 1",
+            "ON CONFLICT(name) DO UPDATE SET mention_count = entities.mention_count + 1",
             (name, etype)
         )
-        entity_id = cur.execute("SELECT id FROM entities WHERE name = ?", (name,)).fetchone()[0]
-
-        # Link to knowledge atom
+        row = cur.execute("SELECT id FROM entities WHERE name = ?", (name,)).fetchone()
+        if not row:
+            continue
+        entity_id = row[0]
         cur.execute(
             "INSERT OR IGNORE INTO knowledge_entities (knowledge_id, entity_id) VALUES (?, ?)",
             (knowledge_id, entity_id)
@@ -332,6 +410,7 @@ def ingest_file_knowledge(
     category: str,
     content_text: str,
     provider: str = "unknown",
+    context_tags: dict = None,
 ):
     """
     Ingest a processed file into the knowledge DB.
@@ -388,35 +467,47 @@ def ingest_file_knowledge(
 
     # --- DB transaction: fast writes only, no slow I/O inside ---
     conn = _connect(username)
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    # Skip if already ingested
-    existing = cur.execute(
-        "SELECT id FROM knowledge WHERE source_type='file' AND source_id=?",
-        (file_hash,)
-    ).fetchone()
-    if existing:
+        # Check if already ingested — if so, recover entities in case they failed before
+        existing = cur.execute(
+            "SELECT id FROM knowledge WHERE source_type='file' AND source_id=?",
+            (file_hash,)
+        ).fetchone()
+        if existing:
+            knowledge_id = existing[0]
+            if entities:
+                tags = dict(context_tags or {})
+                tags.setdefault("username", username)
+                _upsert_entities(conn, knowledge_id, entities, context_tags=tags)
+            conn.commit()
+            return
+
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ring = get_ring(category, "file", filename)
+        cur.execute(
+            """INSERT OR IGNORE INTO knowledge
+               (source_type, source_id, title, summary, content_snippet, category, ring, created_at)
+               VALUES ('file', ?, ?, ?, ?, ?, ?, ?)""",
+            (file_hash, filename, summary, snippet, category, ring, now)
+        )
+        knowledge_id = cur.lastrowid
+
+        if knowledge_id:
+            tags = dict(context_tags or {})
+            tags.setdefault("username", username)
+            _upsert_entities(conn, knowledge_id, entities, context_tags=tags)
+            if embed_vec:
+                conn.execute("UPDATE knowledge SET embedding=? WHERE id=?", (embed_vec, knowledge_id))
+
+        conn.commit()
+        logging.info(f"KNOWLEDGE: Ingested file '{filename}' (summary={'yes' if summary else 'backfill'})")
+    except Exception as e:
+        logging.warning(f"KNOWLEDGE: ingest_file_knowledge failed for '{filename}': {e}")
+        raise
+    finally:
         conn.close()
-        return
-
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    ring = get_ring(category, "file", filename)
-    cur.execute(
-        """INSERT OR IGNORE INTO knowledge
-           (source_type, source_id, title, summary, content_snippet, category, ring, created_at)
-           VALUES ('file', ?, ?, ?, ?, ?, ?, ?)""",
-        (file_hash, filename, summary, snippet, category, ring, now)
-    )
-    knowledge_id = cur.lastrowid
-
-    if knowledge_id:
-        _upsert_entities(conn, knowledge_id, entities)
-        if embed_vec:
-            conn.execute("UPDATE knowledge SET embedding=? WHERE id=?", (embed_vec, knowledge_id))
-
-    conn.commit()
-    conn.close()
-    logging.info(f"KNOWLEDGE: Ingested file '{filename}' (summary={'yes' if summary else 'backfill'})")
 
 
 def ingest_conversation(
@@ -540,7 +631,6 @@ def search(username: str, query: str, max_results: int = 10) -> List[Dict]:
     """
     init_db(username)
     conn = _connect(username)
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     # FTS5 match query — escape special chars for safety
@@ -553,28 +643,53 @@ def search(username: str, query: str, max_results: int = 10) -> List[Dict]:
     terms = fts_query.split()
     fts_expr = " OR ".join(terms)
 
-    try:
-        rows = cur.execute("""
-            SELECT k.id, k.source_type, k.title, k.summary,
-                   k.content_snippet, k.category, k.created_at,
-                   rank
-            FROM knowledge_fts
-            JOIN knowledge k ON k.id = knowledge_fts.rowid
-            WHERE knowledge_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """, (fts_expr, max_results)).fetchall()
-    except sqlite3.OperationalError:
-        # FTS match syntax error — fall back to simple LIKE
-        rows = cur.execute("""
-            SELECT id, source_type, title, summary,
-                   content_snippet, category, created_at,
-                   0 as rank
-            FROM knowledge
-            WHERE title LIKE ? OR summary LIKE ? OR content_snippet LIKE ?
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (f"%{query}%", f"%{query}%", f"%{query}%", max_results)).fetchall()
+    from core.db import is_postgres as _is_pg
+    if _is_pg():
+        # PostgreSQL: use tsvector search_vector column (maintained by trigger in pg_schema.sql)
+        try:
+            rows = cur.execute("""
+                SELECT id, source_type, title, summary,
+                       content_snippet, category, created_at,
+                       0 as rank
+                FROM knowledge
+                WHERE search_vector @@ plainto_tsquery('english', %s)
+                ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC
+                LIMIT %s
+            """, (query, query, max_results)).fetchall()
+        except Exception:
+            conn._conn.rollback()
+            rows = cur.execute("""
+                SELECT id, source_type, title, summary,
+                       content_snippet, category, created_at,
+                       0 as rank
+                FROM knowledge
+                WHERE title ILIKE %s OR summary ILIKE %s OR content_snippet ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (f"%{query}%", f"%{query}%", f"%{query}%", max_results)).fetchall()
+    else:
+        try:
+            rows = cur.execute("""
+                SELECT k.id, k.source_type, k.title, k.summary,
+                       k.content_snippet, k.category, k.created_at,
+                       rank
+                FROM knowledge_fts
+                JOIN knowledge k ON k.id = knowledge_fts.rowid
+                WHERE knowledge_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_expr, max_results)).fetchall()
+        except Exception:
+            # FTS match syntax error — fall back to simple LIKE
+            rows = cur.execute("""
+                SELECT id, source_type, title, summary,
+                       content_snippet, category, created_at,
+                       0 as rank
+                FROM knowledge
+                WHERE title LIKE ? OR summary LIKE ? OR content_snippet LIKE ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (f"%{query}%", f"%{query}%", f"%{query}%", max_results)).fetchall()
 
     results = []
     for row in rows:
@@ -649,7 +764,7 @@ def build_knowledge_context(username: str, query: str, max_chars: int = 3000) ->
     # 2. Recent relevant conversations
     init_db(username)
     conn = _connect(username)
-    conn.row_factory = sqlite3.Row
+    # row_factory handled by db.py
     try:
         convos = conn.execute("""
             SELECT persona, user_input, assistant_response, delta_e, created_at
@@ -677,7 +792,7 @@ def build_knowledge_context(username: str, query: str, max_chars: int = 3000) ->
     # 3. Top entities by mention count
     if total_len < max_chars:
         conn = _connect(username)
-        conn.row_factory = sqlite3.Row
+        # row_factory handled by db.py
         try:
             top_ents = conn.execute("""
                 SELECT name, entity_type, mention_count
@@ -720,21 +835,54 @@ def backfill_summaries(username: str, batch_size: int = 5):
 
     # Fleet calls outside DB connection (each takes 10-60s)
     updates = []
-    for row_id, title, snippet, category in rows:
+    def _backfill_one(item):
+        row_id, title, snippet, category = item
         if not snippet:
-            continue
-        try:
-            prompt = (
-                f"Summarize this document in 2-3 sentences.\n\n"
-                f"Title: {title}\nCategory: {category}\n\n"
-                f"Content:\n{snippet}\n\nSummary:"
-            )
-            resp = llm_router.ask(prompt, preferred_tier="free")
-            if resp and resp.content:
-                updates.append((resp.content.strip()[:500], row_id))
-        except Exception as e:
-            logging.debug(f"KNOWLEDGE: Backfill failed for id={row_id}: {e}")
-            break  # Stop batch on failure (likely rate-limited)
+            return ""  # truthy-ish skip, not a fleet failure
+        prompt = (
+            f"Summarize this document in 2-3 sentences.\n\n"
+            f"Title: {title}\nCategory: {category}\n\n"
+            f"Content:\n{snippet}\n\nSummary:"
+        )
+        resp = llm_router.ask(prompt, preferred_tier="free")
+        if resp and resp.content:
+            return resp.content.strip()[:500]
+        return None  # signals retry
+
+    try:
+        from core.fleet_retry import fleet_batch
+
+        def _on_save(results):
+            _updates = [(res, item[0]) for item, res in results if res]
+            if _updates:
+                c = _connect(username)
+                c.executemany("UPDATE knowledge SET summary=? WHERE id=?", _updates)
+                c.commit()
+                c.close()
+
+        completed = fleet_batch(
+            list(rows), _backfill_one,
+            max_retries=5, delay=1.5,
+            save_every=25, on_save=_on_save,
+        )
+        updates = [(res, item[0]) for item, res in completed if res]
+    except ImportError:
+        # Fallback if fleet_retry not available — old behavior but continue on failure
+        for row_id, title, snippet, category in rows:
+            if not snippet:
+                continue
+            try:
+                prompt = (
+                    f"Summarize this document in 2-3 sentences.\n\n"
+                    f"Title: {title}\nCategory: {category}\n\n"
+                    f"Content:\n{snippet}\n\nSummary:"
+                )
+                resp = llm_router.ask(prompt, preferred_tier="free")
+                if resp and resp.content:
+                    updates.append((resp.content.strip()[:500], row_id))
+            except Exception as e:
+                logging.info(f"KNOWLEDGE: Backfill failed for id={row_id}: {e}")
+                continue  # keep going, don't break
 
     # Fast batch write — no slow I/O inside
     if updates:
@@ -776,7 +924,7 @@ def get_top_gaps(username: str, limit: int = 10) -> List[Dict]:
     """Return the most frequently hit knowledge gaps."""
     init_db(username)
     conn = _connect(username)
-    conn.row_factory = sqlite3.Row
+    # row_factory handled by db.py
     rows = conn.execute(
         """SELECT query, source, gap_type, entity_name, times_hit, first_seen, last_seen
            FROM knowledge_gaps
@@ -821,7 +969,7 @@ def semantic_search(username: str, query: str, max_results: int = 5) -> List[Dic
 
     init_db(username)
     conn = _connect(username)
-    conn.row_factory = sqlite3.Row
+    # row_factory handled by db.py
 
     query_vec = embeddings.embed(query)
     if not query_vec:

@@ -1,0 +1,3 @@
+# SAFE App Base Dependencies
+# Add these to your requirements.txt
+safe-protocol>=2.0.0
