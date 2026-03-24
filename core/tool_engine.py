@@ -783,6 +783,31 @@ def _tool_composio_list_actions(toolkit_slug: str, limit: int = 20,
     return composio_provider.list_actions(toolkit_slug, int(limit))
 
 
+def _tool_store_put(key: str, value: str, agent: str, username: str) -> Dict[str, Any]:
+    """Upsert a key-value pair into willow_state."""
+    try:
+        agent_registry._set_state(username, key, value)
+        return {
+            "success": True,
+            "result": {"key": key, "stored": True},
+            "governance_status": "APPROVED"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"store_put failed: {str(e)}"
+        }
+
+
+def _tool_store_update(key: str, value: str, agent: str, username: str) -> Dict[str, Any]:
+    """Conditional write — update willow_state key only if it exists. NOT YET IMPLEMENTED."""
+    return {
+        "success": False,
+        "error": "store_update not yet implemented. Use store_put for upsert.",
+        "governance_status": "STUB"
+    }
+
+
 def init_tools():
     """Initialize and register all tools."""
 
@@ -919,6 +944,25 @@ def init_tools():
         required_trust="WORKER",
         governance_type="state",
         executor=_tool_composio_list_actions
+    ))
+
+    # Store write access (OPERATOR level)
+    register_tool(ToolDefinition(
+        name="store_put",
+        description="Upsert a key-value pair into willow_state. Creates or overwrites.",
+        parameters={"key": "string", "value": "string"},
+        required_trust="OPERATOR",
+        governance_type="state",
+        executor=_tool_store_put
+    ))
+
+    register_tool(ToolDefinition(
+        name="store_update",
+        description="Conditional write — update willow_state key only if it already exists. STUB: not yet implemented.",
+        parameters={"key": "string", "value": "string"},
+        required_trust="OPERATOR",
+        governance_type="state",
+        executor=_tool_store_update
     ))
 
 # Initialize tools on module load
